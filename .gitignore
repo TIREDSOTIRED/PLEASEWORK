@@ -9,3 +9,6 @@ coverage/
 
 marketing/ig.config.json
 marketing/outbox/
+
+# QA artifacts
+.gstack/

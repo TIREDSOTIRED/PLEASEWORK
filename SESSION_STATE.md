@@ -87,3 +87,12 @@ Service account key at `%TEMP%\opencode\sa-saidalete.json` â€” DELETE after sess
 - AuthContext.mockLogin(tenantType): DEV-guarded, dynamic-imports mockAuth (prod bundle verified CLEAN - no fawbi-dev/mock-uid strings in dist). No Firebase Auth call, no OAuth, no verification gate, zero Firestore reads/writes; data stays in IndexedDB mock tenant buckets.
 - AuthScreen: amber dev-only buttons (Pharmacy/Warehouse) under Google button, rendered only when import.meta.env.DEV.
 - Usage: npm run dev -> localhost:3000 -> dev buttons on sign-in card. Logout via normal flow. tsc 0, build OK.
+
+## Round 9 - 2026-09-04 (gstack-style full-system QA pass)
+- Driver: playwright-core over CDP attached to dedicated QA Chrome (:9222), user's real logins. Scripts in ~\qa-driver (reusable regression harness).
+- gstack status: original runtime never installed (bash/bun); Windows port = docs + stub bridge only; installed to ~\.agents\skills anyway. pwsh 7 installed via winget.
+- PASSED: POS sale->FEFO->receipt; quick-adjust +/-; external sale (Truck, credit); full B2B loop incl FEFO dispatch drawer + manifest + auto-ingest (+10 ampiclox at pharmacy); AR/EN; theme; CDP-offline queue flush.
+- FIXED (5 commits): ISSUE-003 HIGH LedgerTab orphaned -> Stock/Ledger toggle in RootNavigator (uses inventoryView; both roles; table now uses real sale.status). ISSUE-002 IDBKeyRange DataError -> strict string guard in IndexedDbInventoryRepository.getValidBatchesForDrug. ISSUE-001 raw ISO expiry dates -> split('T')[0] at 5 sites. ISSUE-005 manifest \$ -> SYP toLocaleString. ISSUE-004 typo ÇáãäÇÝÓÊ -> ÈíÇä ÇáÔÍä.
+- Report: .gstack/qa-reports/qa-report-localhost-2026-09-04.md (health 58 -> 91). .gstack/ gitignored.
+- Observations deferred: offer stock staleness (product decision), React dup-key dev warning, activeTab not persisted on reload, SettingsTab salesLogs={[]}.
+- Test data footprint: TEKWANDO captopril 76 + one 60 SYP sale; warehouse atorvastatin 402, ampiclox 510.
