@@ -96,3 +96,11 @@ Service account key at `%TEMP%\opencode\sa-saidalete.json` — DELETE after sess
 - Report: .gstack/qa-reports/qa-report-localhost-2026-09-04.md (health 58 -> 91). .gstack/ gitignored.
 - Observations deferred: offer stock staleness (product decision), React dup-key dev warning, activeTab not persisted on reload, SettingsTab salesLogs={[]}.
 - Test data footprint: TEKWANDO captopril 76 + one 60 SYP sale; warehouse atorvastatin 402, ampiclox 510.
+
+## Round 10 - 2026-09-04 (Option B: offer-stock propagation)
+- Investigation (read-only): .gstack/qa-reports/offer-stock-discrepancy.md - 395-vs-402 drift root-caused: offers only synced on B2B dispatch; POS/external/adjust/intake never touched them; dispatch used read-absolute-write (lost-update race).
+- FIX (commit "feat(b2b): Option B offer-stock propagation"): new src/infrastructure/b2b/syncOfferAvailability.ts (syncOffersInBatch) - increment(delta) inside caller's atomic writeBatch, deterministic off_{tenant}_{safeId} + legacy fallback, floor-at-0 + auto-deactivate, never creates husk docs, offline-safe (swallows read errors).
+- Wired into: firestoreCompleteSale (POS+external), FirestoreStockEngine flush, onUpdateStock corrections, firestoreAddMedicine intake, B2BQueueTab dispatch (replaced old block).
+- Clamp-on-read Math.max(0) in WarehouseOffersTab + B2BMarketplaceTab mappings.
+- tsc EXIT:0. NOT done: live browser verification (power outage); pre-fix drift (e.g. 395 offer) persists until that SKU next moves or merchant re-publishes; publish prefill 250-for-zero-stock landmine untouched (product decision); dispatch clamp branch keeps a tiny rare race (documented).
+- Residual notes: legacy query uses catalogId == safe id (matches actual publish data); surplus offers share the deterministic id scheme so pharmacy POS sales sync their own surplus offers too.
