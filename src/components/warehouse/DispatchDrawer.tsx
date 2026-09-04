@@ -587,7 +587,7 @@ export default function DispatchDrawer({
                   ) : (
                     <>
                       <Printer className="w-5 h-5 stroke-[2.5]" />
-                      <span>{lang === 'ar' ? 'اعتماد وشحن الطلبية وطباعة المنافست' : 'Confirm & Dispatch Order'}</span>
+                      <span>{lang === 'ar' ? 'اعتماد وشحن الطلبية وطباعة بيان الشحن' : 'Confirm & Dispatch Order'}</span>
                     </>
                   )}
                 </button>
