@@ -12,3 +12,6 @@ marketing/outbox/
 
 # QA artifacts
 .gstack/
+
+# graphify local index (rebuildable)
+.graphify/

@@ -1,0 +1,21 @@
+﻿{
+    "$schema":  "https://opencode.ai/config.json",
+    "compaction":  {
+                       "auto":  true,
+                       "prune":  true,
+                       "reserved":  10000
+                   },
+    "watcher":  {
+                    "ignore":  [
+                                   "node_modules/**",
+                                   "dist/**",
+                                   "public/master_catalog.db",
+                                   "public/catalog.json"
+                               ]
+                },
+    "plugin":  [
+                   ".opencode/plugins/graphify.js",
+                   "headroom",
+                   "ponytail"
+               ]
+}
