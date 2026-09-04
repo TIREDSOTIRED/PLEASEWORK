@@ -348,7 +348,10 @@ export default function StockIntakeModal({
       let canonicalCatalogId: string | undefined = undefined;
       let finalId = '';
       const finalName = isManualMode ? medName.trim() : (selectedItem?.name || selectedItem?.name_en || selectedItem?.nameEn || medName.trim());
-      const finalBarcode = scannedBarcode.trim() || (selectedItem?.barcode ? String(selectedItem.barcode) : `BAR-${Date.now()}`);
+      // No invented placeholder barcodes: a BAR-<timestamp> value is not a
+      // physical identity — the intake resolver treats empty barcode via the
+      // deterministic custom_nm_<name> path instead.
+      const finalBarcode = scannedBarcode.trim() || (selectedItem?.barcode ? String(selectedItem.barcode) : '');
       const batchCode = batchNumber.trim() || `BATCH-${Date.now()}`;
 
       if (!isManualMode && selectedItem) {

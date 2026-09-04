@@ -28,6 +28,7 @@ import { db } from '../../infrastructure/firebase';
 import { doc, updateDoc, setDoc, collection, addDoc, getDoc, query, where, getDocs, writeBatch, arrayUnion, deleteDoc } from 'firebase/firestore';
 import { IndexedDbInventoryRepository } from '../../infrastructure/storage/IndexedDbInventoryRepository';
 import { syncOffersInBatch } from '../../infrastructure/b2b/syncOfferAvailability';
+import { resolveIntakeTarget, buildRestockUpdate } from '../../infrastructure/intake/intakeIdentity';
 import { POSTransactionService, POSTransactionRecord } from '../../infrastructure/storage/POSTransactionService';
 import { BackgroundSyncEngine } from '../../infrastructure/sync/BackgroundSyncEngine';
 import { DrugMaster, DrugBatch } from '../../domain/inventory';
@@ -328,48 +329,79 @@ export default function RootNavigator({
  };
  const setActiveTabAndClear = (tab: any) => { setActiveTab(tab); };
 
- const firestoreAddMedicine = async (m: Medicine) => {
- if (!currentSession?.pharmacyId || !db) return;
- try {
- const canonicalCatalogId = m.catalogId ? String(m.catalogId) : (m.barcode || m.name.toLowerCase().replace(/[^a-z0-9]/g, '_'));
- const safeMedId = canonicalCatalogId.replace(/\//g, '_');
- const finalizedMedicine = { ...m, id: safeMedId, catalogId: canonicalCatalogId };
+  const firestoreAddMedicine = async (m: Medicine) => {
+  if (!currentSession?.pharmacyId || !db) return;
+  try {
+  const tenantId = currentSession.pharmacyId;
+  const inventoryCol = collection(db, 'tenants', tenantId, 'storage_inventory');
+  // Intake identity resolution: an existing tenant inventory document is
+  // authoritative. Resolve by catalog doc id first, then by normalized
+  // barcode, before any create — a restock must never mint a second
+  // inventory document for a product that already has a card.
+  const resolution = await resolveIntakeTarget({
+  catalogId: m.catalogId,
+  id: m.id,
+  barcode: m.barcode,
+  name: m.name,
+  lookup: {
+  async getByDocId(safeId) {
+  const snap = await getDoc(doc(db, 'tenants', tenantId, 'storage_inventory', safeId));
+  return snap.exists() ? { id: snap.id, data: snap.data() as Record<string, any> } : null;
+  },
+  async getByBarcode(bc) {
+  const snap = await getDocs(query(inventoryCol, where('barcode', '==', bc)));
+  return snap.docs.map(d => ({ id: d.id, data: d.data() as Record<string, any> }));
+  }
+  }
+  });
+  if (resolution.barcodeMatches && resolution.barcodeMatches.length > 1) {
+  console.warn(`[intake-identity] barcode "${m.barcode}" matches ${resolution.barcodeMatches.length} inventory docs in tenant ${tenantId} (fragmentation):`, resolution.barcodeMatches.map(d => d.id).join(', '));
+  }
 
- const repo = new IndexedDbInventoryRepository();
- const drugMaster = new DrugMaster(canonicalCatalogId, m.barcode || '', m.name, m.genericName || m.name, false, 25);
- await repo.saveDrugMaster(drugMaster);
- const batchId = `batch-${Date.now()}`;
- const drugBatch = new DrugBatch(batchId, canonicalCatalogId, m.batchNumber || m.barcode || 'N/A', new Date(m.expiryDate), m.costPrice ?? m.price, m.stock, false);
- await repo.saveDrugBatch(drugBatch);
- // NOTE: no sync-queue payload is enqueued here. The medicine is written
- // directly to Firestore below (Firestore offline persistence covers the
- // offline case natively). The old ADD_MEDICINE queue payload targeted a
- // REST endpoint that never existed and only produced phantom "failed" items.
+  const safeMedId = resolution.safeMedId;
+  const canonicalCatalogId = resolution.catalogId;
+  const existingData = resolution.existing?.data;
+  const finalizedMedicine = { ...m, id: safeMedId, catalogId: canonicalCatalogId };
 
- // Optimistic state update
- setMedicines((prev: Medicine[]) => {
- const existingIdx = prev.findIndex(p => p.id === safeMedId);
- let updated;
- if (existingIdx >= 0) {
- updated = [...prev];
- updated[existingIdx] = { ...updated[existingIdx], stock: updated[existingIdx].stock + finalizedMedicine.stock, lastUpdated: new Date().toISOString() };
- } else {
- updated = [...prev, finalizedMedicine];
- }
- try { persistMirror(`syrian_inventory_${currentSession.pharmacyId}`, updated); } catch(e){}
- return updated;
- });
+  const repo = new IndexedDbInventoryRepository();
+  // IDB mirror is keyed by catalogId — POS offline batch lookup
+  // (getValidBatchesForDrug) queries by the card's catalogId.
+  const drugMaster = new DrugMaster(canonicalCatalogId, m.barcode || '', m.name, m.genericName || m.name, false, 25);
+  await repo.saveDrugMaster(drugMaster);
+  const batchId = `batch-${Date.now()}`;
+  const drugBatch = new DrugBatch(batchId, canonicalCatalogId, m.batchNumber || m.barcode || 'N/A', new Date(m.expiryDate), m.costPrice ?? m.price, m.stock, false);
+  await repo.saveDrugBatch(drugBatch);
+  // NOTE: no sync-queue payload is enqueued here. The medicine is written
+  // directly to Firestore below (Firestore offline persistence covers the
+  // offline case natively). The old ADD_MEDICINE queue payload targeted a
+  // REST endpoint that never existed and only produced phantom "failed" items.
 
- const medRef = doc(db, 'tenants', currentSession.pharmacyId, 'storage_inventory', safeMedId);
- const medDoc = await getDoc(medRef);
+  const addStock = Number(m.stock) || 0;
+  const nowIso = new Date().toISOString();
 
- const inventoryData = { ...finalizedMedicine, pharmacyId: currentSession.pharmacyId };
- if (medDoc.exists()) {
- const existingStock = medDoc.data().stock || 0;
- await setDoc(medRef, { ...inventoryData, stock: existingStock + finalizedMedicine.stock, lastUpdated: new Date().toISOString() }, { merge: true });
- } else {
- await setDoc(medRef, inventoryData);
- }
+  // Optimistic state update — keyed by the RESOLVED identity so a
+  // barcode-merge restock updates the original card, not a duplicate.
+  setMedicines((prev: Medicine[]) => {
+  const existingIdx = prev.findIndex(p => p.id === safeMedId);
+  let updated;
+  if (existingIdx >= 0) {
+  updated = [...prev];
+  updated[existingIdx] = { ...updated[existingIdx], stock: (Number(updated[existingIdx].stock) || 0) + addStock, lastUpdated: nowIso };
+  } else {
+  updated = [...prev, finalizedMedicine];
+  }
+  try { persistMirror(`syrian_inventory_${tenantId}`, updated); } catch(e){}
+  return updated;
+  });
+
+  const medRef = doc(db, 'tenants', tenantId, 'storage_inventory', safeMedId);
+
+  if (existingData) {
+  const merged = buildRestockUpdate({ id: safeMedId, ...existingData }, finalizedMedicine, addStock, nowIso);
+  await setDoc(medRef, merged, { merge: true });
+  } else {
+  await setDoc(medRef, { ...finalizedMedicine, pharmacyId: tenantId });
+  }
 
  const batchRef = doc(db, 'tenants', currentSession.pharmacyId, 'storage_inventory', safeMedId, 'batches', batchId);
  const batchData = {
