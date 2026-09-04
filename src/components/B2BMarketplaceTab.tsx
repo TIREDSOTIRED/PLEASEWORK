@@ -678,6 +678,10 @@ export default function B2BMarketplaceTab({ triggerToast, lang }: B2BMarketplace
           sellerType: (group as any).sellerType || 'WHOLESALE_WAREHOUSE',
           ...(group.sellerCity ? { sellerCity: group.sellerCity } : {}),
           status: 'PENDING_APPROVAL',
+          // Canonical 'Cash' | 'Credit' (POS vocabulary) — normalized from
+          // the checkout's lowercase paymentType. Historical orders lack
+          // this field and are treated as Cash (no receivable).
+          paymentMethod: paymentType === 'credit' ? 'Credit' : 'Cash',
           totalValue: orderTotalValue,
           totalQuantity: orderTotalQty,
           createdAt: new Date().toISOString(),

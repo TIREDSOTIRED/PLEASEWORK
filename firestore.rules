@@ -60,6 +60,24 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------------------------------
+    // FINANCIAL EVENTS — append-only seller-side revenue/COGS/receivable
+    // stream. ONE deterministic event per source record (fin_{orderId}),
+    // written by the EARNING tenant in the same atomic dispatch batch as the
+    // stock deduction. Members read their own events only. No deletes —
+    // corrections arrive as future compensating events, never edits.
+    // ------------------------------------------------------------------------
+    match /financial_events/{eventId} {
+      allow read: if isSignedIn() && tenantMember(resource.data.tenantId);
+      allow create: if isSignedIn()
+        && tenantMember(request.resource.data.tenantId);
+      allow update: if isSignedIn()
+        && tenantMember(resource.data.tenantId)
+        && tenantMember(request.resource.data.tenantId)
+        && resource.data.linkedRef == request.resource.data.linkedRef;
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------------------------
     // B2B ORDERS — strict multi-tenant state machine
     //   SELLER: PENDING_APPROVAL -> DISPATCHED | DRAFT (reject)
     //   BUYER:  DISPATCHED       -> RECEIVED

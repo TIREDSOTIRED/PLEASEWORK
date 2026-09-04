@@ -36,6 +36,9 @@ export interface B2BOrder {
   items: B2BOrderItemSnapshot[];
   totalValue?: number;
   totalQuantity?: number;
+  /** 'Cash' | 'Credit' — canonical vocabulary shared with POS ledger records.
+   *  Absent on historical orders: treated as Cash (no receivable contribution). */
+  paymentMethod?: 'Cash' | 'Credit';
   createdAt: string; // ISO
   updatedAt: string; // ISO
 }

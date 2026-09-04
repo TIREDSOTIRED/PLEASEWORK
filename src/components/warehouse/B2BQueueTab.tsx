@@ -6,6 +6,7 @@ import { B2BOrder } from '../../domain/b2b';
 import { DrugBatch } from '../../domain/inventory';
 import { FEFOStockAllocator } from '../../domain/services';
 import { syncOffersInBatch } from '../../infrastructure/b2b/syncOfferAvailability';
+import { buildB2BDispatchEvent } from '../../infrastructure/b2b/recordB2BFinancialEvent';
 import {
   Package,
   CheckCircle,
@@ -387,6 +388,11 @@ export default function B2BQueueTab({ activeTenantId, triggerToast, lang = 'ar' 
       const batch = writeBatch(db);
       const orderItems = dispatchedOrder.items || [];
 
+      // Financial event accumulators (Phase A): recognized revenue from the
+      // immutable price snapshots + COGS from the ACTUAL FEFO allocations.
+      const financialItems: { costAtOrder: number; quantityDispatched: number }[] = [];
+      const financialAllocations: { unitCost: number; quantityToDeduct: number }[][] = [];
+
       if (orderItems.length === 0) {
         triggerToast(lang === 'ar' ? 'الطلبية لا تحتوي أصنافاً' : 'Order contains no items', 'error');
         return false;
@@ -446,6 +452,18 @@ export default function B2BQueueTab({ activeTenantId, triggerToast, lang = 'ar' 
         }
         batch.update(invRef, { stock: increment(-requestedQty), lastUpdated: nowIso });
 
+        financialItems.push({
+          costAtOrder: Number(item.costAtOrder) || 0,
+          quantityDispatched: requestedQty
+        });
+        // COGS truth: real acquisition cost of each dispensed batch, resolved
+        // by batchId (allocations carry ids only — same pattern as POS sales).
+        const batchCostById = new Map(drugBatches.map(b => [b.id, b.ownerBaseCost]));
+        financialAllocations.push(allocations.map(a => ({
+          unitCost: Number(batchCostById.get(a.batchId)) || 0,
+          quantityToDeduct: Number(a.quantityToDeduct) || 0
+        })));
+
  // Offer availability sync — shared helper (Option B): increment-based so
  // concurrent dispatches/POS sales cannot clobber each other; floors at 0
  // and deactivates when the offer drains. Deterministic id
@@ -461,10 +479,21 @@ export default function B2BQueueTab({ activeTenantId, triggerToast, lang = 'ar' 
 
       // ------------------------------------------------------------------
       // PHASE B — Atomic commit: stock deduction + offer availability +
-      // DISPATCHED status flip land in ONE Firestore writeBatch. If ANY
-      // operation fails, nothing applies — a DISPATCHED state can never
-      // exist without its matching stock deduction.
+      // DISPATCHED status flip + the seller's ONE financial event land in
+      // ONE Firestore writeBatch. If ANY operation fails, nothing applies —
+      // a DISPATCHED state can never exist without its matching stock
+      // deduction and financial event (and vice versa).
       // ------------------------------------------------------------------
+      const financialEvent = buildB2BDispatchEvent({
+        order: existingData,
+        sellerTenantId: effectiveTenantId,
+        items: financialItems,
+        allocationsByItem: financialAllocations,
+        dispatchToken: sanitizedManifest.dispatchToken,
+        occurredAt: nowIso
+      });
+      batch.set(doc(db, 'financial_events', financialEvent.id), financialEvent);
+
       batch.update(orderRef, {
         status: 'DISPATCHED',
         dispatchedAt: nowIso,
