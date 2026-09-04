@@ -65,7 +65,9 @@ export class IndexedDbInventoryRepository implements IInventoryRepository {
  public async getValidBatchesForDrug(drugMasterId: string): Promise<DrugBatch[]> {
  if (IndexedDBStore.getActiveTenantId() === 'default') { return []; }
 
- if (!drugMasterId) {
+ // Strict key validation: IDBKeyRange.only throws DataError on non-string keys
+ // (callers may pass undefined-adjacent garbage from loose catalog fields).
+ if (!drugMasterId || typeof drugMasterId !== 'string' || !drugMasterId.trim()) {
  return [];
  }
  const db = await IndexedDBStore.getDatabase();
@@ -74,10 +76,6 @@ export class IndexedDbInventoryRepository implements IInventoryRepository {
  
  // Querying unspoiled batches (isSpoiled = false) for the specific drugMasterId
  const index = store.index("drugMasterId_isSpoiled");
- 
- if (!drugMasterId) {
- return [];
- }
  
  try {
  const range = IDBKeyRange.only([drugMasterId, false]);
