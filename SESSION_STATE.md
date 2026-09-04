@@ -74,3 +74,16 @@ Service account key at `%TEMP%\opencode\sa-saidalete.json` â€” DELETE after sess
   2. WarehouseInventoryTab rewritten: direct smooth responsive +-1 carton quick adjuster connected to StockEngine (instant optimistic UI + debounced atomic batch flush).
 - STRATEGY FOR OFF-PLATFORM (OUT-OF-APP) WAREHOUSE ORDERS: Documented 3-tier approach (Manual Direct Dispatch log, rapid barcode scan-out, single-player inventory system).
 - Build OK (1m 26s), live on :4173.
+
+## Round 7b - 2026-08-26 (Tier 1 off-app orders SHIPPED)
+- firestoreCompleteSale: added optional buyerNote param -> note field on ledger record (POS call unaffected).
+- firestoreExternalSale wrapper: single-item cart -> same FEFO engine. Passed as onExternalSale to WarehouseInventoryTab.
+- WarehouseInventoryTab: Truck button per row -> external sale modal (qty + äÞÏÇð/Ïíä) -> validates stock, dispatches via real sale engine (FEFO batch cost, ledger, offline queue). Bilingual.
+- Result: WhatsApp/phone orders recorded without breaking inventory truth. Tier 2 (scan-out) + Tier 3 (bulk backfill) deferred until volume justifies.
+- Lint+build OK, relaunched :4173.
+
+## Round 8 - 2026-08-26 (dev-only mock auth)
+- src/dev/mockAuth.ts: createMockSession(tenantType) -> fake UserSession + PharmacyProfile (mock_pharmacy_id / mock_warehouse_id, email fawbi-dev@mock.local so existing RoleSwitcher works post-login).
+- AuthContext.mockLogin(tenantType): DEV-guarded, dynamic-imports mockAuth (prod bundle verified CLEAN - no fawbi-dev/mock-uid strings in dist). No Firebase Auth call, no OAuth, no verification gate, zero Firestore reads/writes; data stays in IndexedDB mock tenant buckets.
+- AuthScreen: amber dev-only buttons (Pharmacy/Warehouse) under Google button, rendered only when import.meta.env.DEV.
+- Usage: npm run dev -> localhost:3000 -> dev buttons on sign-in card. Logout via normal flow. tsc 0, build OK.

@@ -55,6 +55,7 @@ interface AuthContextType {
   }) => Promise<boolean>;
   switchPharmacy: (pharmacyId: string) => Promise<void>;
   overrideDevState?: (tenantType: TenantType) => void;
+  mockLogin?: (tenantType: TenantType) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -745,6 +746,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  /**
+   * DEV-ONLY instant login without Google OAuth (localhost / vite dev server).
+   * Hard-guarded by import.meta.env.DEV: a no-op in any production build.
+   * Fabricates a local session + tenant profile — no Firebase Auth call,
+   * no Firestore access, no writes ever leave the browser.
+   */
+  const mockLogin = (tenantType: TenantType) => {
+    if (!import.meta.env.DEV) return;
+    import("../../dev/mockAuth").then(({ createMockSession }) => {
+      const { session, profile } = createMockSession(tenantType);
+      setError(null);
+      IndexedDBStore.setTenant(profile.tenantId);
+      try {
+        localStorage.setItem(`syrian_pharmacy_profile_${session.userId}`, JSON.stringify(profile));
+      } catch (e) {}
+      setCurrentSession(session);
+      setActivePharmacy(profile);
+      console.info(`[mockAuth] Signed in as ${session.fullName} (tenant: ${profile.tenantId}) — dev only, no Firebase involved.`);
+    }).catch(err => console.warn("mockAuth load failed:", err));
+  };
+
   return (
     <AuthContext.Provider value={{ 
       currentSession, 
@@ -762,7 +784,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       completeOnboarding, 
       updateOrganizationProfile,
       switchPharmacy, 
-      overrideDevState 
+      overrideDevState,
+      mockLogin 
     }}>
       {children}
     </AuthContext.Provider>

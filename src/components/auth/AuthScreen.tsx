@@ -45,7 +45,8 @@ export default function AuthScreen({ lang = 'en', setLang }: AuthScreenProps) {
     isLoading, 
     error, 
     setError, 
-    clearError 
+    clearError,
+    mockLogin
   } = useAuth();
 
   const { theme: uiTheme, setTheme: setUiTheme, triggerToast } = useUI();
@@ -432,6 +433,39 @@ export default function AuthScreen({ lang = 'en', setLang }: AuthScreenProps) {
                     <span>{isArabic ? 'المتابعة بحساب Google' : 'Google Account'}</span>
                   </button>
                 </div>
+
+                {/* DEV-ONLY mock login — stripped from production builds */}
+                {import.meta.env.DEV && (
+                  <div className="pt-3">
+                    <div className="relative flex py-1 items-center">
+                      <div className="flex-grow border-t border-dashed border-amber-300"></div>
+                      <span className="flex-shrink mx-3 text-[10px] text-amber-600 font-bold uppercase tracking-wider">
+                        {isArabic ? 'تطوير فقط' : 'Dev only'}
+                      </span>
+                      <div className="flex-grow border-t border-dashed border-amber-300"></div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => mockLogin?.('RETAIL_PHARMACY')}
+                        disabled={isLoading}
+                        className="py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl font-bold text-xs shadow-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                      >
+                        <Store className="w-3.5 h-3.5" />
+                        <span>{isArabic ? 'دخول صيدلية' : 'Pharmacy'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => mockLogin?.('WHOLESALE_WAREHOUSE')}
+                        disabled={isLoading}
+                        className="py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 rounded-xl font-bold text-xs shadow-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                      >
+                        <Building2 className="w-3.5 h-3.5" />
+                        <span>{isArabic ? 'دخول مستودع' : 'Warehouse'}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
               </form>
             )}
 

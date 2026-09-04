@@ -433,7 +433,7 @@ export default function RootNavigator({
  }
  };
 
- const firestoreCompleteSale = async (cartItems: any[], paymentMethod: string = 'Cash', checkoutSessionId?: string) => {
+ const firestoreCompleteSale = async (cartItems: any[], paymentMethod: string = 'Cash', checkoutSessionId?: string, buyerNote?: string) => {
  if (!currentSession?.pharmacyId || !db) return { success: false };
  try {
  const employeeId = currentSession.email || 'unknown';
@@ -541,7 +541,9 @@ export default function RootNavigator({
  unknownCostItemCount,
  status: paymentMethod === 'Credit' ? 'Pending' : 'Paid',
  paymentMethod,
- employeeId
+ employeeId,
+ // Off-app orders (WhatsApp/phone) carry the buyer context for the ledger.
+ ...(buyerNote ? { note: buyerNote } : {})
  };
 
  const ledgerRef = doc(db, 'tenants', currentSession.pharmacyId, 'ledger', saleId);
@@ -583,6 +585,16 @@ export default function RootNavigator({
  console.warn('Failed to complete sale', err);
  return { success: false, error: err.message || "System failure" };
  }
+ };
+
+ /** Off-app order (WhatsApp/phone): single-item dispatch through the same
+  *  FEFO sale engine so ledger, profit and stock stay truthful. */
+ const firestoreExternalSale = (med: Medicine, qty: number, payment: 'Cash' | 'Credit') => {
+ if (!Number(qty)) return Promise.resolve({ success: false, error: 'Qty must be > 0' });
+ return firestoreCompleteSale(
+ [{ medId: med.id, name: med.name, quantitySold: qty, priceAtSale: med.price || 0 }],
+ payment
+ ) as Promise<{ success: boolean; error?: string }>;
  };
 
  if (isLoading) {
@@ -782,6 +794,7 @@ export default function RootNavigator({
             isLoadingInventory={isLoadingInventory}
             onUpdateStock={onUpdateStock}
             onQuickAdjust={quickAdjustStock}
+            onExternalSale={firestoreExternalSale}
             onUpdateMedicine={firestoreUpdateMedicine}
             onSelectMedicine={onSelectMedicine}
             onAddMedicine={firestoreAddMedicine}
