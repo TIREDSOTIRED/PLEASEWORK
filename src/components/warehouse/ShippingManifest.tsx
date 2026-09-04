@@ -109,10 +109,10 @@ export default function ShippingManifest({ data }: ShippingManifestProps) {
  )}
  </td>
  <td className="p-2 border-r border-slate-300 font-mono font-bold">{item.allocatedBatch}</td>
- <td className="p-2 border-r border-slate-300 font-mono text-[10px]">{item.expiryDate}</td>
+ <td className="p-2 border-r border-slate-300 font-mono text-[10px]">{String(item.expiryDate).split('T')[0]}</td>
  <td className="p-2 border-r border-slate-300 font-mono text-right font-bold">{item.quantity}</td>
- <td className="p-2 border-r border-slate-300 font-mono text-right">${item.unitPrice.toFixed(2)}</td>
- <td className="p-2 font-mono text-right font-bold">${item.totalPrice.toFixed(2)}</td>
+ <td className="p-2 border-r border-slate-300 font-mono text-right">{item.unitPrice.toLocaleString('en-US')} SYP</td>
+ <td className="p-2 font-mono text-right font-bold">{item.totalPrice.toLocaleString('en-US')} SYP</td>
  </tr>
  ))}
  </tbody>
@@ -121,7 +121,7 @@ export default function ShippingManifest({ data }: ShippingManifestProps) {
  <td colSpan={4} className="p-2 text-right uppercase border-r border-black">Total Dispatched</td>
  <td className="p-2 text-right font-mono border-r border-black">{data.totalQuantity} Units</td>
  <td className="p-2 text-right uppercase border-r border-black">Order Value</td>
- <td className="p-2 text-right font-mono text-sm">${data.totalValue.toFixed(2)}</td>
+ <td className="p-2 text-right font-mono text-sm">{data.totalValue.toLocaleString('en-US')} SYP</td>
  </tr>
  </tfoot>
  </table>
