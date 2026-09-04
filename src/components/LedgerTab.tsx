@@ -13,6 +13,7 @@ import {
  RotateCcw 
 } from 'lucide-react';
 import { SaleRecord, Medicine } from '../types';
+import { todayLocalKey, isSameLocalDay } from '../utils/dayKey';
 
 interface LedgerTabProps {
  salesLogs?: SaleRecord[];
@@ -48,14 +49,18 @@ export default function LedgerTab({ salesLogs = [], medicines = [], lang = 'en',
  return matchesFilter && matchesSearch;
  });
 
- // Financial Summary Totals — aggregated from raw salesLogs (ISO timestamps).
- // "Daily" means TODAY (local date) — real daily reports, not all-time relabeled.
- const todayKey = new Date().toLocaleDateString('sv'); // YYYY-MM-DD local
- const todaysSales = (salesLogs || []).filter(s => (s.timestamp || '').slice(0, 10) === todayKey);
+  // Financial Summary Totals — aggregated from raw salesLogs (ISO timestamps).
+  // Daily boundaries go through the shared LOCAL-date utility: timestamps are
+  // stored as UTC ISO strings, so slicing the UTC date would misattribute
+  // sales made between local 00:00–02:59 (UTC+3) to the previous day.
+  const todayKey = todayLocalKey();
+  // ONE transaction population for مبيعات اليوم and ربح اليوم: ALL of
+  // today's sales, cash and credit alike. Credit exposure is tracked
+  // separately by the all-time receivables card below.
+  const todaysSales = (salesLogs || []).filter(s => isSameLocalDay(s.timestamp, todayKey));
 
- const totalDailySales = todaysSales
- .filter(s => s.status !== 'Pending')
- .reduce((sum, s) => sum + (Number(s.totalRevenue) || 0), 0);
+  const totalDailySales = todaysSales
+  .reduce((sum, s) => sum + (Number(s.totalRevenue) || 0), 0);
 
  // Net profit today: revenue − known batch acquisition cost (snapshotted at sale time).
  const todayProfit = todaysSales
@@ -97,10 +102,10 @@ export default function LedgerTab({ salesLogs = [], medicines = [], lang = 'en',
  <div className="text-2xl font-black text-slate-900 font-mono">
  {totalDailySales.toLocaleString()} <span className="text-xs text-slate-500 font-normal">{lang === 'ar' ? 'ل.س' : 'SYP'}</span>
  </div>
- <div className="flex items-center gap-1.5 text-xs text-[#047857] font-semibold">
- <ArrowUpRight className="w-4 h-4" />
- <span>{lang === 'ar' ? 'مقبوضات اليوم' : "Today's Receipts"}</span>
- </div>
+  <div className="flex items-center gap-1.5 text-xs text-[#047857] font-semibold">
+  <ArrowUpRight className="w-4 h-4" />
+  <span>{lang === 'ar' ? 'مبيعات نقدية وآجلة' : 'Cash + credit sales'}</span>
+  </div>
  </div>
 
  {/* Net Profit Today */}

@@ -2,6 +2,7 @@ import React from 'react';
 import { motion } from 'motion/react';
 import { Activity, Receipt, TrendingUp, DollarSign, AlertTriangle } from 'lucide-react';
 import { useAuth } from '../application/auth/AuthContext';
+import { localDateKey, todayLocalKey, isSameLocalDay } from '../utils/dayKey';
 
 interface SalesAnalyticsTabProps {
  lang: 'en' | 'ar';
@@ -11,14 +12,10 @@ interface SalesAnalyticsTabProps {
 export default function SalesAnalyticsTab({ lang, salesLogs = [] }: SalesAnalyticsTabProps) {
  const { currentSession } = useAuth();
  
- const todayStr = new Date().toLocaleDateString('sv'); // local YYYY-MM-DD (UTC-safe for evening sales)
- const todaysSales = (salesLogs || []).filter(log => {
- try {
- return log.timestamp.split('T')[0] === todayStr;
- } catch {
- return false;
- }
- });
+  // Local-date boundary via the shared utility. Timestamps are UTC ISO —
+  // slicing the UTC date misattributes local 00:00–02:59 sales (UTC+3).
+  const todayStr = todayLocalKey();
+  const todaysSales = (salesLogs || []).filter(log => isSameLocalDay(log.timestamp, todayStr));
 
  const totalRevenue = todaysSales.reduce((sum, s) => sum + s.totalRevenue, 0);
  const totalProfit = todaysSales.reduce((sum, s) => sum + s.totalProfit, 0);
@@ -37,17 +34,16 @@ export default function SalesAnalyticsTab({ lang, salesLogs = [] }: SalesAnalyti
  0
  );
 
- // ---- Last 14 days: revenue & profit per local day (for the trend chart) ----
- const dayKey = (d: Date) => d.toLocaleDateString('sv');
- const last14 = Array.from({ length: 14 }, (_, i) => {
- const d = new Date();
- d.setDate(d.getDate() - (13 - i));
- return { key: dayKey(d), label: String(d.getDate()), revenue: 0, profit: 0 };
- });
- const byDay = new Map(last14.map(d => [d.key, d]));
- for (const s of (salesLogs || [])) {
- const k = (s.timestamp || '').slice(0, 10);
- const bucket = byDay.get(k);
+  // ---- Last 14 days: revenue & profit per local day (for the trend chart) ----
+  const last14 = Array.from({ length: 14 }, (_, i) => {
+  const d = new Date();
+  d.setDate(d.getDate() - (13 - i));
+  return { key: localDateKey(d), label: String(d.getDate()), revenue: 0, profit: 0 };
+  });
+  const byDay = new Map(last14.map(d => [d.key, d]));
+  for (const s of (salesLogs || [])) {
+  const k = localDateKey(s.timestamp);
+  const bucket = k ? byDay.get(k) : undefined;
  if (bucket) {
  bucket.revenue += Number(s.totalRevenue) || 0;
  bucket.profit += Number(s.totalProfit) || 0;
@@ -57,8 +53,9 @@ export default function SalesAnalyticsTab({ lang, salesLogs = [] }: SalesAnalyti
 
  // ---- Top-5 movers over the same 14 days ----
  const moverMap = new Map<string, { name: string; qty: number; revenue: number }>();
- for (const s of (salesLogs || [])) {
- if ((s.timestamp || '').slice(0, 10) < last14[0].key) continue;
+  for (const s of (salesLogs || [])) {
+  const saleDay = localDateKey(s.timestamp);
+  if (!saleDay || saleDay < last14[0].key) continue;
  for (const it of (s.items || []) as any[]) {
  const cur = moverMap.get(it.medId) || { name: it.name, qty: 0, revenue: 0 };
  cur.qty += Number(it.quantitySold) || 0;
