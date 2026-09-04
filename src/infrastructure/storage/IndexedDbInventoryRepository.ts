@@ -70,39 +70,44 @@ export class IndexedDbInventoryRepository implements IInventoryRepository {
  if (!drugMasterId || typeof drugMasterId !== 'string' || !drugMasterId.trim()) {
  return [];
  }
- const db = await IndexedDBStore.getDatabase();
- const transaction = db.transaction("drug_batch", "readonly");
- const store = transaction.objectStore("drug_batch");
- 
- // Querying unspoiled batches (isSpoiled = false) for the specific drugMasterId
- const index = store.index("drugMasterId_isSpoiled");
- 
- try {
- const range = IDBKeyRange.only([drugMasterId, false]);
- 
- return new Promise<DrugBatch[]>((resolve, reject) => {
- const request = index.openCursor(range);
- const batches: DrugBatch[] = [];
+  const db = await IndexedDBStore.getDatabase();
+  const transaction = db.transaction("drug_batch", "readonly");
+  const store = transaction.objectStore("drug_batch");
 
- request.onsuccess = (event: any) => {
- const cursor = event.target.result;
- if (cursor) {
- const data = cursor.value;
- const batchDate = typeof data.expiryDate === "string" ? new Date(data.expiryDate) : data.expiryDate;
- batches.push(new DrugBatch(
- data.id,
- data.drugMasterId,
- data.batchNumber,
- batchDate,
- data.ownerBaseCost,
- data.currentRemainingQuantity,
- !!data.isSpoiled
- ));
- cursor.continue();
- } else {
- resolve(batches);
- }
- };
+  // Query the plain drugMasterId index with a STRING key. The compound
+  // drugMasterId_isSpoiled index is unusable by design: booleans are not
+  // valid IndexedDB keys, so IDBKeyRange.only([id, false]) always throws
+  // DataError and records never index under the compound keyPath either.
+  // Spoiled filtering happens in memory instead — batches per drug are tiny.
+  const index = store.index("drugMasterId");
+
+  try {
+  const range = IDBKeyRange.only(drugMasterId);
+
+  return new Promise<DrugBatch[]>((resolve, reject) => {
+  const request = index.openCursor(range);
+  const batches: DrugBatch[] = [];
+
+  request.onsuccess = (event: any) => {
+  const cursor = event.target.result;
+  if (cursor) {
+  const data = cursor.value;
+  if (!!data.isSpoiled) { cursor.continue(); return; }
+  const batchDate = typeof data.expiryDate === "string" ? new Date(data.expiryDate) : data.expiryDate;
+  batches.push(new DrugBatch(
+  data.id,
+  data.drugMasterId,
+  data.batchNumber,
+  batchDate,
+  data.ownerBaseCost,
+  data.currentRemainingQuantity,
+  !!data.isSpoiled
+  ));
+  cursor.continue();
+  } else {
+  resolve(batches);
+  }
+  };
  request.onerror = () => {
  reject(new Error(`Failed to retrieve valid batches: ${request.error?.message}`));
  };
