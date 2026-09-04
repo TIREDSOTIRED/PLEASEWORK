@@ -27,6 +27,7 @@ import { Medicine, SaleRecord } from '../../types';
 import { db } from '../../infrastructure/firebase';
 import { doc, updateDoc, setDoc, collection, addDoc, getDoc, query, where, getDocs, writeBatch, arrayUnion, deleteDoc } from 'firebase/firestore';
 import { IndexedDbInventoryRepository } from '../../infrastructure/storage/IndexedDbInventoryRepository';
+import { syncOffersInBatch } from '../../infrastructure/b2b/syncOfferAvailability';
 import { POSTransactionService, POSTransactionRecord } from '../../infrastructure/storage/POSTransactionService';
 import { BackgroundSyncEngine } from '../../infrastructure/sync/BackgroundSyncEngine';
 import { DrugMaster, DrugBatch } from '../../domain/inventory';
@@ -178,18 +179,20 @@ export default function RootNavigator({
   { stock: increment(-op.deduct), lastUpdated: nowIso }
   );
   }
-  batch.update(doc(db, 'tenants', tenantId, 'storage_inventory', medId), {
-  stock: increment(plan.aggregateDelta),
-  lastUpdated: nowIso,
-  history: arrayUnion({
-  id: `hist-${Date.now()}`,
-  timestamp: nowIso,
-  type: plan.aggregateDelta > 0 ? 'stock_correction_up' : 'stock_correction_down',
-  note,
-  quantityChange: plan.aggregateDelta
-  })
-  });
-  await batch.commit();
+ batch.update(doc(db, 'tenants', tenantId, 'storage_inventory', medId), {
+ stock: increment(plan.aggregateDelta),
+ lastUpdated: nowIso,
+ history: arrayUnion({
+ id: `hist-${Date.now()}`,
+ timestamp: nowIso,
+ type: plan.aggregateDelta > 0 ? 'stock_correction_up' : 'stock_correction_down',
+ note,
+ quantityChange: plan.aggregateDelta
+ })
+ });
+ // Offer availability mirror — quick-adjust deltas move offers too (Option B).
+ await syncOffersInBatch({ batch, tenantId, safeCatalogId: medId, delta: plan.aggregateDelta });
+ await batch.commit();
   });
  }
 
@@ -291,6 +294,14 @@ export default function RootNavigator({
  }
  );
 
+ // Offer availability mirror — corrections move offers too (Option B).
+ await syncOffersInBatch({
+ batch,
+ tenantId: currentSession.pharmacyId,
+ safeCatalogId: safeMedId,
+ delta
+ });
+
  await batch.commit();
 
  setMedicines((prev: Medicine[]) => prev.map(m => m.id === id ? { ...m, stock: (m.stock || 0) + delta, lastUpdated: nowIso } : m));
@@ -372,6 +383,21 @@ export default function RootNavigator({
  lastUpdated: new Date().toISOString()
  };
  await setDoc(batchRef, batchData);
+
+ // Offer availability mirror — intake/restock raises active offers too
+ // (Option B). Own batch: the primary writes above must never wait on it.
+ try {
+ const offerBatch = writeBatch(db);
+ await syncOffersInBatch({
+ batch: offerBatch,
+ tenantId: currentSession.pharmacyId,
+ safeCatalogId: safeMedId,
+ delta: m.stock || 0
+ });
+ await offerBatch.commit();
+ } catch (offerSyncErr) {
+ console.warn('Offer availability sync skipped after intake:', offerSyncErr);
+ }
 
  // Optional global-catalog mirror — NON-BLOCKING by design.
  // This write must NEVER abort or gate private-inventory persistence above:
@@ -527,6 +553,15 @@ export default function RootNavigator({
  batch.update(medRef, {
  stock: increment(-cartItem.quantitySold),
  lastUpdated: new Date().toISOString()
+ });
+
+ // Offer availability mirror — wholesale/surplus offers of this SKU track
+ // real stock (Option B propagation). Joins the same atomic batch.
+ await syncOffersInBatch({
+ batch,
+ tenantId: currentSession.pharmacyId,
+ safeCatalogId: safeMedId,
+ delta: -cartItem.quantitySold
  });
  }
 

@@ -5,6 +5,7 @@ import { db } from '../../infrastructure/firebase';
 import { B2BOrder } from '../../domain/b2b';
 import { DrugBatch } from '../../domain/inventory';
 import { FEFOStockAllocator } from '../../domain/services';
+import { syncOffersInBatch } from '../../infrastructure/b2b/syncOfferAvailability';
 import {
   Package,
   CheckCircle,
@@ -445,47 +446,18 @@ export default function B2BQueueTab({ activeTenantId, triggerToast, lang = 'ar' 
         }
         batch.update(invRef, { stock: increment(-requestedQty), lastUpdated: nowIso });
 
- // Offer availability sync. Primary: deterministic id used at publish time
- // (off_{sellerTenantId}_{safeCatalogId}). Fallback: legacy offers created by
- // older builds under different document ids are located by
- // sellerTenantId + catalogId + active so their availability still tracks
- // real stock. Skipped only when no offer exists for this medicine.
- let offerRef = doc(db, 'wholesale_offers', `off_${effectiveTenantId}_${safeMedId}`);
- let offerSnap = await getDoc(offerRef);
- if (!offerSnap.exists()) {
- const legacyOffersQuery = query(
- collection(db, 'wholesale_offers'),
- where('sellerTenantId', '==', effectiveTenantId),
- where('catalogId', '==', rawCatalogId),
- where('active', '==', true)
- );
- const legacySnap = await getDocs(legacyOffersQuery);
- if (!legacySnap.empty) {
- offerRef = legacySnap.docs[0].ref;
- offerSnap = null; // re-read via the resolved ref below
- const legacyData = legacySnap.docs[0].data() as any;
- const currentAvailableLegacy = Number(legacyData.availableQuantity ?? legacyData.stock ?? 0);
- const nextAvailableLegacy = Math.max(0, currentAvailableLegacy - requestedQty);
- batch.set(offerRef, {
- availableQuantity: nextAvailableLegacy,
- stock: nextAvailableLegacy,
- active: nextAvailableLegacy > 0,
- updatedAt: nowIso
- }, { merge: true });
+ // Offer availability sync — shared helper (Option B): increment-based so
+ // concurrent dispatches/POS sales cannot clobber each other; floors at 0
+ // and deactivates when the offer drains. Deterministic id
+ // (off_{sellerTenantId}_{safeCatalogId}) first, legacy docs by
+ // sellerTenantId + catalogId + active. No-op when no offer exists.
+ await syncOffersInBatch({
+ batch,
+ tenantId: effectiveTenantId,
+ safeCatalogId: safeMedId,
+ delta: -requestedQty
+ });
  }
- }
- if (offerSnap && offerSnap.exists()) {
- const offerData = offerSnap.data() as any;
- const currentAvailable = Number(offerData.availableQuantity ?? offerData.stock ?? 0);
- const nextAvailable = Math.max(0, currentAvailable - requestedQty);
- batch.set(offerRef, {
- availableQuantity: nextAvailable,
- stock: nextAvailable,
- active: nextAvailable > 0,
- updatedAt: nowIso
- }, { merge: true });
- }
-      }
 
       // ------------------------------------------------------------------
       // PHASE B — Atomic commit: stock deduction + offer availability +
