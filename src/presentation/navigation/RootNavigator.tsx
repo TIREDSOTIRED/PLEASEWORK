@@ -786,8 +786,34 @@ export default function RootNavigator({
  <B2BMarketplaceTab triggerToast={triggerToast} lang={lang} />
  )}
 
- {(activeTab === 'inventory' || activeTab === 'warehouse_inventory') && (
- activePharmacy?.tenantType === "WHOLESALE_WAREHOUSE" ? (
+{(activeTab === 'inventory' || activeTab === 'warehouse_inventory') && (
+  <>
+  {/* Stock / Financial Ledger sub-view toggle — LedgerTab was previously orphaned (dead import). */}
+  <div className="px-4 pt-3 flex items-center gap-2 shrink-0" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+  <div className="inline-flex bg-slate-100 dark:bg-slate-800 rounded-lg p-1 gap-1 border border-slate-200 dark:border-slate-700">
+  <button
+  onClick={() => setInventoryView('inventory')}
+  className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors cursor-pointer ${inventoryView === 'inventory' ? 'bg-white dark:bg-slate-700 text-brand-700 shadow-sm' : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'}`}
+  >
+  {lang === 'ar' ? 'المخزون' : 'Stock'}
+  </button>
+  <button
+  onClick={() => setInventoryView('ledger')}
+  className={`px-3 py-1.5 rounded-md text-xs font-bold transition-colors cursor-pointer ${inventoryView === 'ledger' ? 'bg-white dark:bg-slate-700 text-brand-700 shadow-sm' : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'}`}
+  >
+  {lang === 'ar' ? 'السجل المالي' : 'Financial Ledger'}
+  </button>
+  </div>
+  </div>
+  {inventoryView === 'ledger' ? (
+  <LedgerTab
+  salesLogs={salesLogs}
+  medicines={medicines}
+  lang={lang}
+  triggerToast={triggerToast}
+  />
+  ) : (
+  activePharmacy?.tenantType === "WHOLESALE_WAREHOUSE" ? (
           <WarehouseInventoryTab 
             triggerToast={triggerToast}
             medicines={medicines}
@@ -826,12 +852,14 @@ export default function RootNavigator({
             sortBy={sortBy}
             setSortBy={setSortBy}
             sortOrder={sortOrder}
-            setSortOrder={setSortOrder}
-          />
- )
- )}
+setSortOrder={setSortOrder}
+           />
+  )
+  )}
+  </>
+)}
 
- {activeTab === 'scan' && (
+  {activeTab === 'scan' && (
  <ScanAddTab 
  onAddMedicine={firestoreAddMedicine} 
  lang={lang} 

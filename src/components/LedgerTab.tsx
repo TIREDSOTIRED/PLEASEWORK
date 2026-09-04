@@ -34,7 +34,7 @@ export default function LedgerTab({ salesLogs = [], medicines = [], lang = 'en',
  customer: (sale as any).buyerPharmacyId || (lang === 'ar' ? 'عميل مباشر' : 'Direct Customer'),
  date: sale.timestamp ? new Date(sale.timestamp).toLocaleString() : '2026-07-30',
  amount: sale.totalRevenue || 0,
- status: 'Paid',
+ status: (sale as any).status || 'Paid',
  type: 'POS Sale',
  itemsCount: sale.items?.length || 1
  }));
