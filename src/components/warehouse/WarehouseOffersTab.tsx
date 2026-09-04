@@ -230,7 +230,7 @@ export default function WarehouseOffersTab({ medicines = [], lang = 'en', trigge
         name: med.name,
         genericName: med.genericName || '',
         price: med.price || 0,
-        stock: med.stock || 0,
+        stock: Math.max(0, Number(med.stock) || 0),
         expiryDate: med.expiryDate || new Date(Date.now() + 365*24*60*60*1000).toISOString().split('T')[0],
         company: med.supplier || '',
         barcode: med.barcode || ''
@@ -253,7 +253,9 @@ export default function WarehouseOffersTab({ medicines = [], lang = 'en', trigge
               name: catItem.name_en || catItem.name,
               genericName: catItem.composition || '',
               price: catItem.price || 5000,
-              stock: 500,
+              // No storage_inventory doc → no sellable stock exists.
+              // Catalog fallback items must never advertise an invented quantity.
+              stock: 0,
               expiryDate: new Date(Date.now() + 365*24*60*60*1000).toISOString().split('T')[0],
               company: catItem.company || '',
               barcode: catItem.barcode || ''
@@ -296,7 +298,9 @@ export default function WarehouseOffersTab({ medicines = [], lang = 'en', trigge
             composition: item.genericName,
             company: item.company || '',
             priceSyp: defaultWholesalePrice,
-            availableQuantity: item.stock > 0 ? item.stock : 250,
+            // Derived from actual sellable stock only — a zero-stock item
+            // must never prefill a synthetic positive quantity (phantom 250).
+            availableQuantity: Math.max(0, Number(item.stock) || 0),
             minimumOrderQuantity: bulkMoq || 10,
             bonus: bulkBonus || '',
             isClearance: false,
@@ -344,10 +348,30 @@ export default function WarehouseOffersTab({ medicines = [], lang = 'en', trigge
     const warehouseName = activePharmacy?.name || 'Warehouse';
     const warehouseCity = (typeof activePharmacy?.location === 'string' ? activePharmacy.location : activePharmacy?.location?.city) || 'Damascus';
 
+    // Sellable-stock truth: the canonical storage_inventory snapshot.
+    // A published offer must never advertise more than real stock —
+    // drafts with synthetic/inflated quantities are clamped here, and
+    // zero-stock items are drained (qty 0 + inactive) instead of published.
+    const stockByCanonicalId = new Map<string, number>();
+    medicines.forEach(med => {
+      const canonicalId = med.catalogId || med.id;
+      stockByCanonicalId.set(canonicalId, Math.max(0, Number(med.stock) || 0));
+    });
+
+    let clampedCount = 0;
+    let drainedCount = 0;
+
     const newOffers: WholesaleOffer[] = selectedMedIds.map((medId) => {
       const draft = draftForms[medId];
       const safeCatalogId = String(draft?.catalogId || medId).replace(/\//g, '_');
       const offerDocId = `off_${sellerId}_${safeCatalogId}`;
+
+      const draftQty = Math.max(0, Number(draft?.availableQuantity) || 0);
+      const actualStock = stockByCanonicalId.get(draft?.catalogId || medId) ?? 0;
+      const finalQty = Math.min(draftQty, actualStock);
+      if (draftQty > actualStock) clampedCount++;
+      const publishable = finalQty > 0;
+      if (!publishable) drainedCount++;
 
       return {
         id: offerDocId,
@@ -363,14 +387,14 @@ export default function WarehouseOffersTab({ medicines = [], lang = 'en', trigge
         manufacturer: draft?.company || '',
         priceSyp: Number(draft?.priceSyp) || 0,
         price: Number(draft?.priceSyp) || 0,
-        availableQuantity: Number(draft?.availableQuantity) || 0,
-        stock: Number(draft?.availableQuantity) || 0,
+        availableQuantity: finalQty,
+        stock: finalQty,
         minimumOrderQuantity: Number(draft?.minimumOrderQuantity) || 1,
         moq: Number(draft?.minimumOrderQuantity) || 1,
         bonus: draft?.bonus ? String(draft.bonus).trim() : '',
         isClearance: !!draft?.isClearance,
         expiryDate: draft?.expiryDate || new Date().toISOString().split('T')[0],
-        active: true,
+        active: publishable,
         reliability: 4.9,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString()
@@ -395,11 +419,20 @@ export default function WarehouseOffersTab({ medicines = [], lang = 'en', trigge
 
       // Transition to Published state
       setPublishStatus('published');
+      const publishedCount = newOffers.length - drainedCount;
       if (triggerToast) {
+        const detailAr = [
+          drainedCount ? `تم إيقاف ${drainedCount} صنف بلا مخزون` : '',
+          clampedCount ? `تم تعديل كميات ${clampedCount} صنف لمطابقة المخزون الفعلي` : ''
+        ].filter(Boolean).join(' — ');
+        const detailEn = [
+          drainedCount ? `${drainedCount} zero-stock item(s) deactivated` : '',
+          clampedCount ? `${clampedCount} quantity(ies) clamped to real stock` : ''
+        ].filter(Boolean).join(', ');
         triggerToast(
-          lang === 'ar' 
-            ? `تم نشر ${selectedMedIds.length} عروض بنجاح في سوق الجملة` 
-            : `Successfully published ${selectedMedIds.length} wholesale offer(s) to marketplace`, 
+          lang === 'ar'
+            ? `تم نشر ${publishedCount} عروض بنجاح في سوق الجملة${detailAr ? ` (${detailAr})` : ''}`
+            : `Published ${publishedCount} wholesale offer(s)${detailEn ? ` (${detailEn})` : ''}`,
           'success'
         );
       }
