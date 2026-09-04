@@ -772,7 +772,7 @@ export default function WarehouseOffersTab({ medicines = [], lang = 'en', trigge
                     </td>
                     <td className="p-4">
                       <div className="flex flex-col gap-1">
-                        <span className="font-mono text-xs text-slate-600">{offer.expiryDate}</span>
+                        <span className="font-mono text-xs text-slate-600">{String(offer.expiryDate).split('T')[0]}</span>
                         {offer.isClearance && (
                           <span className="text-[9px] font-black text-rose-700 bg-rose-50 border border-rose-200 px-1.5 py-0.2 rounded w-fit uppercase tracking-wider">
                             Clearance

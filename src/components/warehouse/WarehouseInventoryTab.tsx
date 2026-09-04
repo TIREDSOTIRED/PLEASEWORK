@@ -627,7 +627,7 @@ export default function InventoryTab({
  ? 'text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded' 
  : 'text-slate-600 '
  }`}>
- {lang === 'ar' ? 'صلاحية' : 'Exp'}: {item.expiryDate}
+ {lang === 'ar' ? 'صلاحية' : 'Exp'}: {String(item.expiryDate).split('T')[0]}
  </span>
  </div>
  </div>
