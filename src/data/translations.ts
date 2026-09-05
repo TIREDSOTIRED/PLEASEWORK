@@ -72,7 +72,7 @@ export interface AppTranslations {
  expiryDate: string;
  lastDispensation: string;
  unitsListed: string;
- unitCost: string;
+  sellingPrice: string;
  minAlertLimit: string;
  lowStockStatus: string;
  secureStatus: string;
@@ -204,7 +204,7 @@ export const translations: Record<'en' | 'ar', AppTranslations> = {
  expiryDate: "Expiry Date",
  lastDispensation: "Last Dispensation",
  unitsListed: "component(s) listed",
- unitCost: "Unit Cost",
+  sellingPrice: "Selling price",
  minAlertLimit: "Min Alert Limit",
  lowStockStatus: "LOW STOCK",
  secureStatus: "SECURE",
@@ -326,7 +326,7 @@ export const translations: Record<'en' | 'ar', AppTranslations> = {
  expiryDate: "تاريخ الصلاحية",
  lastDispensation: "آخر عملية صرف",
  unitsListed: "مادة مسجلة",
- unitCost: "سعر العلبة",
+  sellingPrice: "سعر البيع",
  minAlertLimit: "تنبيه عند وصول المخزون إلى",
  lowStockStatus: "مخزون منخفض جداً",
  secureStatus: "المخزون آمن",

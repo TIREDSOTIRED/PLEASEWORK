@@ -7,17 +7,11 @@ import {
   Search, 
   AlertTriangle, 
   TrendingDown, 
-  Plus, 
-  Minus, 
   FileText, 
-  Calendar, 
-  MapPin, 
-  Tag, 
   ChevronDown, 
   SlidersHorizontal,
   Copy,
   Check,
-  Eye,
   ShoppingBag,
   ExternalLink,
   Activity,
@@ -30,6 +24,7 @@ import { Medicine } from '../../types';
 import { CATEGORIES } from '../../data/constants';
 import { translations } from '../../data/translations';
 import StockIntakeModal from './StockIntakeModal';
+import MedicineRow from '../MedicineRow';
 
 interface InventoryTabProps {
   medicines: Medicine[];
@@ -290,14 +285,6 @@ export default function InventoryTab({
  console.error("Failed to copy", err);
  triggerToast(lang === 'ar' ? "فشل النسخ. يرجى النسخ يدوياً." : "Failed to copy. Please manually copy the code.", "info");
  });
- };
-
- const getDaysToExpiry = (expiryDateStr: string) => {
- const expiry = new Date(expiryDateStr);
- const today = new Date();
- const diffTime = expiry.getTime() - today.getTime();
- const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
- return diffDays;
  };
 
  return (
@@ -561,202 +548,46 @@ export default function InventoryTab({
   ) : (
  /* Dense Data-Driven List View */
  <div className="space-y-2.5">
- {sortedMedicines.map((item) => {
- const isLow = item.stock < item.minThreshold;
- const daysToExpiry = getDaysToExpiry(item.expiryDate);
- const isExpired = daysToExpiry <= 0;
- const isExpiringSoon = daysToExpiry > 0 && daysToExpiry < 90; // within 3 months is soon
- 
- // Stock capacity level (Green >= 50%, Yellow 20-50%, Red < 20%)
- const stockTarget = item.minThreshold * 2;
- const stockRatio = stockTarget > 0 ? (item.stock / stockTarget) : 0;
- const progressPercentage = Math.min(100, Math.max(0, stockRatio * 100));
- 
- let barColor = 'bg-brand-500';
- let bgBarColor = 'bg-brand-100';
- if (stockRatio < 0.20) {
- barColor = 'bg-rose-500';
- bgBarColor = 'bg-rose-100';
- } else if (stockRatio < 0.50) {
- barColor = 'bg-amber-500';
- bgBarColor = 'bg-amber-100';
- }
-
- return (
- <motion.div
+ {sortedMedicines.map((item) => (
+ <MedicineRow
  key={item.id}
- id={`med-row-${item.id}`}
- layout
- onClick={() => onSelectMedicine(item.id)}
- className="bg-white border border-slate-200/80 hover:border-blue-300/80 hover:bg-blue-50/10 rounded-xl p-3.5 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer group shadow-sm"
- >
- {/* Part 1: Medicine Basic Details */}
- <div className="flex-1 min-w-0">
- <div className="flex items-center gap-2 flex-wrap">
- <span className="text-[10px] font-mono font-bold text-brand-600 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded-md uppercase">
- {translateCategory(item.category)}
- </span>
- <span className="text-[10px] font-mono font-semibold text-slate-400 ">
- {lang === 'ar' ? 'وجبة' : 'Batch'}: {item.batchNumber}
- </span>
- </div>
-
- <h3 className="text-sm font-bold text-slate-800 mt-1 group-hover:text-brand-600 transition-colors tracking-tight flex items-center gap-1.5">
- {item.name}
- <span className="text-xs font-normal text-slate-400 font-mono">({item.strength})</span>
- </h3>
-
- <p className="text-xs text-slate-500 italic truncate mt-0.5">
- {item.genericName}
- </p>
- </div>
-
- {/* Part 2: Shelf and Expiry Metrics */}
- <div className="flex flex-row sm:flex-col justify-between items-center sm:items-start text-xs font-mono text-slate-500 shrink-0 gap-1 min-w-[120px]">
- <div className="flex items-center gap-1.5">
- <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
- <span className="font-semibold text-slate-700 ">{item.shelfLocation}</span>
- </div>
-
- <div className="flex items-center gap-1.5 mt-0.5">
- <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
- <span className={`font-bold ${
- isExpired 
- ? 'text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded' 
- : isExpiringSoon 
- ? 'text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded' 
- : 'text-slate-600 '
- }`}>
- {lang === 'ar' ? 'صلاحية' : 'Exp'}: {String(item.expiryDate).split('T')[0]}
- </span>
- </div>
- </div>
-
- {/* Part 3: Real Stock Levels & Visual Progress Bars */}
- <div className="flex-1 min-w-[150px] shrink-0">
- <div className="flex items-center justify-between text-xs font-mono mb-1.5">
- <span className="text-[10px] text-slate-400 font-bold uppercase">{lang === 'ar' ? 'حالة المخزون' : 'Stock Levels'}</span>
- <span className="font-bold text-slate-700 ">
- {item.stock} <span className="text-slate-400 font-normal">/ {stockTarget} {lang === 'ar' ? 'كرتونة' : 'Cartons'}</span>
- </span>
- </div>
-
- {/* Stock Level Progress Indicator */}
- <div className="w-full h-2 rounded-full bg-slate-100 overflow-hidden relative">
- <div 
- className={`h-full rounded-full ${barColor} transition-all duration-500`}
- style={{ width: `${progressPercentage}%` }}
- />
- </div>
-
- {/* Threshold state indicators */}
- <div className="flex justify-between items-center mt-1">
- <span className="text-[9px] font-mono text-slate-400 uppercase">{lang === 'ar' ? 'الحد الأدنى للطلب:' : 'MOQ:'} {item.minThreshold}</span>
- {isLow ? (
- <span className="text-[9px] font-mono font-bold text-amber-600 uppercase flex items-center gap-1">
- <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping" />
- {t.lowStockStatus}
- </span>
- ) : (
- <span className="text-[9px] font-mono font-bold text-brand-600 uppercase flex items-center gap-1">
- <span className="w-1.5 h-1.5 rounded-full bg-brand-500" />
- {t.secureStatus}
- </span>
- )}
- </div>
- </div>
-
- {/* Part 4: Price & Fast Quick adjustment modifiers */}
- <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0 border-t sm:border-t-0 pt-3 sm:pt-0 border-slate-100 ">
- <div className="text-right">
- <span className="text-xs text-slate-400 font-mono block">{t.unitCost}</span>
- <span className="text-sm font-bold text-brand-600 font-mono">
- {(Number(item?.price) || 0).toLocaleString()} {lang === 'ar' ? 'ل.س' : 'S.P.'}
- </span>
- </div>
-
- <div className="flex items-center gap-2">
+ medicine={item}
+ role="warehouse"
+ lang={lang}
+ onSelect={onSelectMedicine}
+ onQuickAdjust={(id, delta, note) => (onQuickAdjust || onUpdateStock)(id, delta, note)}
+ roleActions={
+ <>
  <button
- onClick={(e) => {
- e.stopPropagation();
+ type="button"
+ onClick={() => {
  if (item && (item as Medicine).id) openEditModal(item as Medicine);
  }}
  title={lang === 'ar' ? 'تعديل بيانات الدواء والمخزون' : 'Edit medicine details & stock'}
- className="p-2 bg-brand-50 hover:bg-brand-100 text-brand-600 hover:text-brand-700 border border-brand-200/70 rounded-xl transition-all cursor-pointer"
+ aria-label={lang === 'ar' ? 'تعديل بيانات الدواء والمخزون' : 'Edit medicine details & stock'}
+ className="w-11 h-11 flex items-center justify-center bg-brand-50 hover:bg-brand-100 text-brand-600 hover:text-brand-700 border border-brand-200/70 rounded-xl transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
  >
- <Pencil className="w-4 h-4" />
+ <Pencil className="w-4 h-4" aria-hidden="true" />
  </button>
 
+ {/* Off-app order (WhatsApp/phone) dispatch */}
  <button
- onClick={(e) => {
- e.stopPropagation();
- onSelectMedicine(item.id);
+ type="button"
+ onClick={() => {
+ setExtSaleMed(item);
+ setExtQty('1');
+ setExtPayment('Cash');
  }}
- title={lang === 'ar' ? 'عرض السجل المفصل والتدقيق' : 'View detailed audit log'}
- className="p-2 bg-slate-50 hover:bg-slate-100 text-slate-500 hover:text-brand-600 border border-slate-200 rounded-xl transition-all cursor-pointer"
+ title={lang === 'ar' ? 'بيع خارجي — طلب واتساب/خارج التطبيق' : 'External sale — off-app order'}
+ aria-label={lang === 'ar' ? 'بيع خارجي — طلب واتساب/خارج التطبيق' : 'External sale — off-app order'}
+ className="w-11 h-11 flex items-center justify-center bg-slate-50 hover:bg-brand-50 text-slate-500 hover:text-brand-700 border border-slate-200 rounded-xl transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60"
  >
- <Eye className="w-4 h-4" />
+ <Truck className="w-4 h-4" aria-hidden="true" />
  </button>
-
-                  {/* Micro Quick Modifiers (Carton level) */}
-                  <div 
-                    onClick={(e) => e.stopPropagation()}
-                    className="flex bg-slate-50 border border-slate-200/80 p-1 rounded-xl items-center shadow-inner"
-                  >
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        e.currentTarget.blur();
-                        if (item.stock > 0) {
-                          (onQuickAdjust || onUpdateStock)(item.id, -1, lang === 'ar' ? 'صرف كرتونة واحدة' : 'Quick deduction 1 carton');
-                        } else {
-                          triggerToast(lang === 'ar' ? 'لا يمكن خفض المخزون دون الصفر' : 'Cannot dispense below zero count', 'info');
-                        }
-                      }}
-                      className="p-1.5 hover:bg-white text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer active:scale-95"
-                      title={lang === 'ar' ? 'صرف كرتونة واحدة' : 'Dispense 1 carton'}
-                    >
-                      <Minus className="w-3.5 h-3.5" />
-                    </button>
-                    
-                    <span className="px-1.5 font-mono text-[10px] font-bold text-slate-400 min-w-[16px] text-center uppercase">
-                      QTY
-                    </span>
-
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        e.currentTarget.blur();
-                        (onQuickAdjust || onUpdateStock)(item.id, 1, lang === 'ar' ? 'توريد كرتونة واحدة' : 'Quick restock 1 carton');
-                      }}
-                      className="p-1.5 hover:bg-white text-slate-400 hover:text-brand-600 rounded-lg transition-colors cursor-pointer active:scale-95"
-                      title={lang === 'ar' ? 'توريد كرتونة واحدة' : 'Restock 1 carton'}
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-
-                  {/* Off-app order (WhatsApp/phone) dispatch */}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setExtSaleMed(item);
-                      setExtQty('1');
-                      setExtPayment('Cash');
-                    }}
-                    className="p-2 bg-slate-50 hover:bg-brand-50 text-slate-500 hover:text-brand-700 border border-slate-200 rounded-xl transition-all cursor-pointer"
-                    title={lang === 'ar' ? 'بيع خارجي — طلب واتساب/خارج التطبيق' : 'External sale — off-app order'}
-                  >
-                    <Truck className="w-4 h-4" />
-                  </button>
- </div>
- </div>
- </motion.div>
- );
- })}
+ </>
+ }
+ />
+ ))}
  </div>
  )}
 </div>

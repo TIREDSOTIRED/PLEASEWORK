@@ -6,17 +6,11 @@ import {
   Search,
   AlertTriangle,
   TrendingDown,
-  Plus,
-  Minus,
   FileText,
-  Calendar,
-  MapPin,
-  Tag,
   ChevronDown,
   SlidersHorizontal,
   Copy,
   Check,
-  Eye,
   ShoppingBag,
   ExternalLink,
   Activity,
@@ -33,6 +27,7 @@ import SurplusPublishModal from './SurplusPublishModal';
 import SurplusManageModal from './SurplusManageModal';
 import { Skeleton } from './ui/Skeleton';
 import StockIntakeModal from './warehouse/StockIntakeModal';
+import MedicineRow from './MedicineRow';
 
 /** Mirrors the manage-modal listing shape (catalogId-keyed). */
 interface SurplusListing {
@@ -228,14 +223,6 @@ export default function InventoryTab({
  console.error("Failed to copy", err);
  triggerToast(lang === 'ar' ? "فشل النسخ. يرجى النسخ يدوياً." : "Failed to copy. Please manually copy the code.", "info");
  });
- };
-
- const getDaysToExpiry = (expiryDateStr: string) => {
- const expiry = new Date(expiryDateStr);
- const today = new Date();
- const diffTime = expiry.getTime() - today.getTime();
- const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
- return diffDays;
  };
 
  return (
@@ -504,204 +491,45 @@ export default function InventoryTab({
  )}
  </div>
  ) : (
- /* Dense Data-Driven List View */
- <div className="space-y-2.5">
- {sortedMedicines.map((item) => {
- const isLow = item.stock < item.minThreshold;
- const daysToExpiry = getDaysToExpiry(item.expiryDate);
- const isExpired = daysToExpiry <= 0;
- const isExpiringSoon = daysToExpiry > 0 && daysToExpiry < 90; // within 3 months is soon
- 
- // Stock capacity level (Green >= 50%, Yellow 20-50%, Red < 20%)
- const stockTarget = item.minThreshold * 2;
- const stockRatio = stockTarget > 0 ? (item.stock / stockTarget) : 0;
- const progressPercentage = Math.min(100, Math.max(0, stockRatio * 100));
- 
- let barColor = 'bg-brand-500';
- let bgBarColor = 'bg-brand-100';
- if (stockRatio < 0.20) {
- barColor = 'bg-rose-500';
- bgBarColor = 'bg-rose-100';
- } else if (stockRatio < 0.50) {
- barColor = 'bg-amber-500';
- bgBarColor = 'bg-amber-100';
- }
-
- return (
- <motion.div
- key={item.id}
- id={`med-row-${item.id}`}
- layout
- onClick={() => onSelectMedicine(item.id)}
- className="bg-white border border-brand-100/80 hover:border-blue-300/80 hover:bg-brand-50/10 :bg-blue-950/10 rounded-xl p-3.5 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-4 cursor-pointer group shadow-sm"
- >
- {/* Part 1: Medicine Basic Details */}
- <div className="flex-1 min-w-0">
- <div className="flex items-center gap-2 flex-wrap">
- <span className="text-[10px] font-mono font-bold text-brand-700 bg-brand-50 border border-brand-100 px-2 py-0.5 rounded-md uppercase">
- {translateCategory(item.category)}
- </span>
- <span className="text-[10px] font-mono font-semibold text-slate-400 ">
- {lang === 'ar' ? 'وجبة' : 'Batch'}: {item.batchNumber}
- </span>
- </div>
-
- <h3 className="text-sm font-bold text-brand-950 mt-1 group-hover:text-brand-700 :text-blue-400 transition-colors tracking-tight flex items-center gap-1.5">
- {item.name}
- <span className="text-xs font-normal text-slate-400 font-mono">({item.strength})</span>
- </h3>
-
- <p className="text-xs text-slate-500 italic truncate mt-0.5">
- {item.genericName}
- </p>
- </div>
-
- {/* Part 2: Shelf and Expiry Metrics */}
- <div className="flex flex-row sm:flex-col justify-between items-center sm:items-start text-xs font-mono text-slate-500 shrink-0 gap-1 min-w-[120px]">
- <div className="flex items-center gap-1.5">
- <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
- <span className="font-semibold text-slate-700 ">{item.shelfLocation}</span>
- </div>
-
- <div className="flex items-center gap-1.5 mt-0.5">
- <Calendar className="w-3.5 h-3.5 text-slate-400 shrink-0" />
- <span className={`font-bold ${
- isExpired 
- ? 'text-rose-600 bg-rose-50 px-1.5 py-0.5 rounded' 
- : isExpiringSoon 
- ? 'text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded' 
- : 'text-slate-600 '
- }`}>
- {lang === 'ar' ? 'صلاحية' : 'Exp'}: {String(item.expiryDate).split('T')[0]}
- </span>
- </div>
- </div>
-
- {/* Part 3: Real Stock Levels & Visual Progress Bars */}
- <div className="flex-1 min-w-[150px] shrink-0">
- <div className="flex items-center justify-between text-xs font-mono mb-1.5">
- <span className="text-[10px] text-slate-400 font-bold uppercase">{lang === 'ar' ? 'حالة المخزون' : 'Stock Levels'}</span>
- <span className="font-bold text-slate-700 ">
- {item.stock} <span className="text-slate-400 font-normal">/ {stockTarget} {lang === 'ar' ? 'علبة' : 'units'}</span>
- </span>
- </div>
-
- {/* Stock Level Progress Indicator */}
- <div className="w-full h-2 rounded-full bg-slate-100 overflow-hidden relative">
- <div 
- className={`h-full rounded-full ${barColor} transition-all duration-500`}
- style={{ width: `${progressPercentage}%` }}
- />
- </div>
-
- {/* Threshold state indicators */}
- <div className="flex justify-between items-center mt-1.5">
- <span className="text-[9px] font-mono text-slate-400 uppercase">{lang === 'ar' ? 'حد الأمان:' : 'Min Alert Limit:'} {item.minThreshold}</span>
- {item.stock === 0 ? (
- <span className="text-[10px] px-2 py-0.5 rounded-md font-mono font-bold text-rose-700 bg-rose-50 border border-rose-200 uppercase flex items-center gap-1">
- <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
- {lang === 'ar' ? 'نفذت الكمية' : 'Out of Stock'}
- </span>
- ) : isLow ? (
- <span className="text-[10px] px-2 py-0.5 rounded-md font-mono font-bold text-amber-700 bg-amber-50 border border-amber-200 uppercase flex items-center gap-1">
- <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse" />
- {t.lowStockStatus}
- </span>
- ) : (
- <span className="text-[10px] px-2 py-0.5 rounded-md font-mono font-bold text-brand-700 bg-brand-50 border border-brand-200 uppercase flex items-center gap-1">
- <span className="w-1.5 h-1.5 rounded-full bg-brand-500" />
- {lang === 'ar' ? 'متوفر' : 'In Stock'}
- </span>
- )}
- </div>
- </div>
-
- {/* Part 4: Price & Fast Quick adjustment modifiers */}
- <div className="flex items-center justify-between sm:justify-end gap-4 shrink-0 border-t sm:border-t-0 pt-3 sm:pt-0 border-slate-100 ">
- <div className="text-right">
- <span className="text-xs text-slate-400 font-mono block">{t.unitCost}</span>
- <span className="text-sm font-bold text-brand-700 font-mono">
- {(Number(item?.price) || 0).toLocaleString()} {lang === 'ar' ? 'ل.س' : 'SYP'}
- </span>
- </div>
-
- <div className="flex items-center gap-2">
- <button
- onClick={(e) => {
- e.stopPropagation();
- if ((item.stock || 0) <= 0 && !listingFor(item)) {
- triggerToast(lang === 'ar' ? 'لا يوجد مخزون لنشره' : 'No stock available to publish', 'info');
- return;
- }
- listingFor(item) ? setManageMed(item) : setSurplusMed(item);
- }}
- title={listingFor(item)
- ? (lang === 'ar' ? 'إدارة عرض الفائض المنشور' : 'Manage published surplus listing')
- : (lang === 'ar' ? 'نشر الفائض في سوق الجملة' : 'Publish surplus to marketplace')}
- className={`p-2 border rounded-xl transition-all cursor-pointer ${
- listingFor(item)?.active
- ? 'bg-brand-50 border-brand-300 text-brand-800 hover:bg-brand-100'
- : 'bg-emerald-50 border-emerald-200/70 text-emerald-600 hover:bg-emerald-100'
- }`}
- >
- <Recycle className="w-4 h-4" />
- </button>
-
- <button
- onClick={(e) => {
- e.stopPropagation();
- onSelectMedicine(item.id);
- }}
- title={lang === 'ar' ? 'عرض السجل المفصل والتدقيق' : 'View detailed audit log'}
- className="p-2 bg-[#F4F7F5] hover:bg-slate-100 text-slate-500 hover:text-brand-700 :text-blue-400 border border-brand-100 rounded-xl transition-all cursor-pointer"
- >
- <Eye className="w-4 h-4" />
- </button>
-
- {/* Micro Quick Modifiers */}
- <div 
- onClick={(e) => e.stopPropagation()}
- className="flex bg-[#F4F7F5] border border-brand-100/80 p-1 rounded-xl items-center shadow-inner"
- >
- <button
- type="button"
- onClick={(e) => {
- e.stopPropagation();
- e.currentTarget.blur();
- if (item.stock > 0) {
- (onQuickAdjust || onUpdateStock)(item.id, -1, lang === 'ar' ? 'تخفيض سريع للمخزون' : 'Quick inventory reduction');
- } else {
- triggerToast(lang === 'ar' ? 'لا يمكن خفض المخزون دون الصفر' : 'Cannot dispense below zero count', 'info');
- }
- }}
- className="p-1.5 hover:bg-white text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
- title={lang === 'ar' ? 'صرف علبة واحدة' : 'Dispense 1 unit'}
- >
- <Minus className="w-3.5 h-3.5" />
- </button>
- 
- <span className="px-1.5 font-mono text-[10px] font-bold text-slate-400 min-w-[16px] text-center uppercase">QTY</span>
-
- <button
- type="button"
- onClick={(e) => {
- e.stopPropagation();
- e.currentTarget.blur();
- (onQuickAdjust || onUpdateStock)(item.id, 1, lang === 'ar' ? 'توريد سريع للمخزون' : 'Quick inventory injection');
- }}
- className="p-1.5 hover:bg-white text-slate-400 hover:text-brand-600 rounded-lg transition-colors cursor-pointer"
- title={lang === 'ar' ? 'توريد علبة واحدة' : 'Restock 1 unit'}
- >
- <Plus className="w-3.5 h-3.5" />
- </button>
- </div>
- </div>
- </div>
- </motion.div>
- );
- })}
- </div>
- )}
+  /* Dense Data-Driven List View */
+  <div className="space-y-2.5">
+  {sortedMedicines.map((item) => (
+  <MedicineRow
+  key={item.id}
+  medicine={item}
+  role="pharmacy"
+  lang={lang}
+  onSelect={onSelectMedicine}
+  onQuickAdjust={(id, delta, note) => (onQuickAdjust || onUpdateStock)(id, delta, note)}
+  roleActions={
+  <button
+  type="button"
+  onClick={() => {
+  if ((item.stock || 0) <= 0 && !listingFor(item)) {
+  triggerToast(lang === 'ar' ? 'لا يوجد مخزون لنشره' : 'No stock available to publish', 'info');
+  return;
+  }
+  listingFor(item) ? setManageMed(item) : setSurplusMed(item);
+  }}
+  title={listingFor(item)
+  ? (lang === 'ar' ? 'إدارة عرض الفائض المنشور' : 'Manage published surplus listing')
+  : (lang === 'ar' ? 'نشر الفائض في سوق الجملة' : 'Publish surplus to marketplace')}
+  aria-label={listingFor(item)
+  ? (lang === 'ar' ? 'إدارة عرض الفائض المنشور' : 'Manage published surplus listing')
+  : (lang === 'ar' ? 'نشر الفائض في سوق الجملة' : 'Publish surplus to marketplace')}
+  className={`w-11 h-11 flex items-center justify-center border rounded-xl transition-all cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/60 ${
+  listingFor(item)?.active
+  ? 'bg-brand-50 border-brand-300 text-brand-800 hover:bg-brand-100'
+  : 'bg-emerald-50 border-emerald-200/70 text-emerald-600 hover:bg-emerald-100'
+  }`}
+  >
+  <Recycle className="w-4 h-4" aria-hidden="true" />
+  </button>
+  }
+  />
+  ))}
+  </div>
+  )}
  </div>
 
  {/* Generation of Compact Plain Text Order Sheet Modal */}
