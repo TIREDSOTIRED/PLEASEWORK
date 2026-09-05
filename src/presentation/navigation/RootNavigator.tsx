@@ -36,7 +36,8 @@ import { RegisterApplicationService } from '../../application/RegisterApplicatio
 import { FEFOStockAllocator } from '../../domain/services';
 import { StockEngine, AdjustmentPlan } from '../../domain/services/StockEngine';
 import { persistMirror } from '../../utils/localMirror';
-import { resolveUnitCost } from '../../utils/cost';
+ import { resolveUnitCost } from '../../utils/cost';
+ import { deriveBatchCost } from '../../utils/cost';
 import { HardwareIntegrationService } from '../../infrastructure/hardware/HardwareIntegrationService';
 import FullScreenScannerTab from '../../components/FullScreenScannerTab';
 import RoleSwitcher from '../../components/RoleSwitcher';
@@ -369,7 +370,7 @@ export default function RootNavigator({
   const drugMaster = new DrugMaster(canonicalCatalogId, m.barcode || '', m.name, m.genericName || m.name, false, 25);
   await repo.saveDrugMaster(drugMaster);
   const batchId = `batch-${Date.now()}`;
-  const drugBatch = new DrugBatch(batchId, canonicalCatalogId, m.batchNumber || m.barcode || 'N/A', new Date(m.expiryDate), m.costPrice ?? m.price, m.stock, false);
+  const drugBatch = new DrugBatch(batchId, canonicalCatalogId, m.batchNumber || m.barcode || 'N/A', new Date(m.expiryDate), deriveBatchCost(m.costPrice).cost, m.stock, false);
   await repo.saveDrugBatch(drugBatch);
   // NOTE: no sync-queue payload is enqueued here. The medicine is written
   // directly to Firestore below (Firestore offline persistence covers the
@@ -404,12 +405,18 @@ export default function RootNavigator({
   }
 
  const batchRef = doc(db, 'tenants', currentSession.pharmacyId, 'storage_inventory', safeMedId, 'batches', batchId);
+ // Cost provenance (batch-cost-profit fix): a real purchase cost becomes the
+ // batch cost; a missing/zero one stays UNKNOWN (0 + costEstimated) — never
+ // the selling price. POS's resolveUnitCost turns 0 into an honest
+ // 'unavailable' line instead of fabricated zero profit.
+ const batchCost = deriveBatchCost(m.costPrice);
  const batchData = {
  batchId: batchId,
  medId: safeMedId,
  batchNumber: m.batchNumber || m.barcode || 'N/A',
  expiryDate: new Date(m.expiryDate).toISOString(),
- cost: m.price,
+ cost: batchCost.cost,
+ costEstimated: batchCost.costEstimated,
  stock: m.stock,
  isSpoiled: false,
  lastUpdated: new Date().toISOString()

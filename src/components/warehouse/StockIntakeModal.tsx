@@ -206,8 +206,10 @@ export default function StockIntakeModal({
           : 0;
     const priceVal = String(Number(rawPrice) || 0);
     setSellingPrice(priceVal);
-    // Catalog reference price is the default purchase cost (editable by the pharmacist).
-    setCostPrice(priceVal);
+    // Purchase cost is intentionally left BLANK: the catalog has no
+    // acquisition-cost field, so a retail-price "default" would fabricate
+    // cost data (batch-cost-profit fix). The pharmacist enters the real
+    // purchase cost; blank flows through as an honest unknown-cost batch.
 
     // Default expiry & batch
     setExpiryDate(prev => prev || getDefaultExpiryDate());

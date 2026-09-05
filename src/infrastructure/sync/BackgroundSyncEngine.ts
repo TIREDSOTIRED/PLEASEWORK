@@ -4,7 +4,8 @@ import { IndexedDbInventoryRepository } from "../storage/IndexedDbInventoryRepos
 import { IndexedDbB2BOrderRepository } from "../storage/IndexedDbB2BOrderRepository";
 import { setDoc, doc, getDoc, collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
-import { IndexedDBStore } from '../storage/IndexedDBStore';
+ import { IndexedDBStore } from '../storage/IndexedDBStore';
+ import { deriveBatchCost } from '../../utils/cost';
 
 // Max delivery attempts per queued payload before it is parked (kept in the queue,
 // never deleted, no longer retried automatically). Prevents infinite retry loops
@@ -228,9 +229,13 @@ export class BackgroundSyncEngine {
  }
  const legacyBatchId = `legacy-${payload.id}`;
  await setDoc(doc(db, 'tenants', tenantId, 'storage_inventory', safeId, 'batches', legacyBatchId), {
- batchId: legacyBatchId, medId: safeId, batchNumber,
- expiryDate: new Date(pMed.expiryDate || Date.now() + 31536000000).toISOString(),
- cost: Number(pMed.price) || 0, stock: Number(pMed.stock) || 0, isSpoiled: false, lastUpdated: nowIso
+  batchId: legacyBatchId, medId: safeId, batchNumber,
+  expiryDate: new Date(pMed.expiryDate || Date.now() + 31536000000).toISOString(),
+  // Cost provenance: legacy records carry no acquisition cost — unknown (0 +
+  // estimated), never the selling price (batch-cost-profit fix).
+  cost: deriveBatchCost((pMed as any).costPrice).cost,
+  costEstimated: deriveBatchCost((pMed as any).costPrice).costEstimated,
+  stock: Number(pMed.stock) || 0, isSpoiled: false, lastUpdated: nowIso
  }, { merge: true });
  }
 

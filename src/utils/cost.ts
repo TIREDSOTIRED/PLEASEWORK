@@ -24,6 +24,18 @@ export function resolveUnitCost(rawCost: number | null | undefined): ResolvedUni
   return { unitCost: 0, provenance: 'unavailable' };
 }
 
+/**
+ * Batch-cost derivation for NEW batches (intake, scan-add, legacy mirrors).
+ * The existing cost-provenance vocabulary applied at batch-creation time:
+ * a recorded purchase cost (> 0) becomes the batch cost; a missing/zero cost
+ * is UNKNOWN (0 + costEstimated) — NEVER the selling price, NEVER a catalog
+ * retail fallback. Historical batches are untouched.
+ */
+export function deriveBatchCost(costPrice: number | null | undefined): { cost: number; costEstimated: boolean } {
+  const resolved = resolveUnitCost(costPrice);
+  return { cost: resolved.unitCost, costEstimated: resolved.provenance === 'unavailable' };
+}
+
 export interface MarginSummary {
   /** Revenue minus KNOWN costs only. When unavailable costs exist this is an upper bound. */
   grossProfit: number;
