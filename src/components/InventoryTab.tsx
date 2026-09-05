@@ -40,9 +40,11 @@ interface SurplusListing {
 
 interface InventoryTabProps {
  medicines: Medicine[];
- onUpdateStock: (id: string, delta: number, note?: string) => void;
- /** Coalesced quick adjust: optimistic local bump, StockEngine flushes the burst. */
- onQuickAdjust?: (id: string, delta: number, note?: string) => void;
+  onUpdateStock: (id: string, delta: number, note?: string) => void;
+  /** Coalesced quick adjust: optimistic local bump, StockEngine flushes the burst. */
+  onQuickAdjust?: (id: string, delta: number, note?: string) => void;
+  /** Whitelisted medicine-level metadata persistence (drawer edits). */
+  onUpdateMedicine?: (m: Partial<Medicine> & Pick<Medicine, 'id'>) => Promise<unknown> | void;
  onSelectMedicine: (id: string) => void;
   onAddMedicine?: (m: Medicine) => Promise<void>;
   /** True until the first Firestore snapshot for this tenant arrives. */
@@ -63,6 +65,7 @@ export default function InventoryTab({
  medicines,
  onUpdateStock,
  onQuickAdjust,
+ onUpdateMedicine,
  onSelectMedicine,
  onAddMedicine,
  isLoadingInventory = false,
@@ -737,12 +740,13 @@ export default function InventoryTab({
  onChanged={loadMySurplusListings}
  />
 
- {/* Phase 2: read-only medicine details drawer (row tap) */}
+ {/* Phase 2: read-only medicine details drawer (row tap) — Phase 3 adds controlled edits */}
  <MedicineDetailsDrawer
  medicine={medicines.find(m => m.id === detailsMedId) || null}
  role="pharmacy"
  lang={lang}
  onClose={() => setDetailsMedId(null)}
+ onUpdateMedicine={onUpdateMedicine}
  />
  </div>
  );

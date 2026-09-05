@@ -462,7 +462,7 @@ export default function RootNavigator({
  }
  };
 
- const firestoreUpdateMedicine = async (m: Medicine) => {
+ const firestoreUpdateMedicine = async (m: Partial<Medicine> & Pick<Medicine, 'id'>) => {
  if (!currentSession?.pharmacyId || !db || !m.id) return;
  try {
  // Optimistic state update
@@ -919,6 +919,7 @@ export default function RootNavigator({
             onQuickAdjust={quickAdjustStock}
             onSelectMedicine={onSelectMedicine}
             onAddMedicine={firestoreAddMedicine}
+            onUpdateMedicine={firestoreUpdateMedicine}
             searchQuery={searchQuery}
             setSearchQuery={setSearchQuery}
             categoryFilter={categoryFilter}

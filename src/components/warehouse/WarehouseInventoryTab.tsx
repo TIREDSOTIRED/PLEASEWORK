@@ -1030,12 +1030,13 @@ export default function InventoryTab({
  initialItem={intakeRequest}
  />
 
- {/* Phase 2: read-only medicine details drawer (row tap) */}
+ {/* Phase 2: read-only medicine details drawer (row tap) — Phase 3 adds controlled edits */}
  <MedicineDetailsDrawer
  medicine={medicines.find(m => m.id === detailsMedId) || null}
  role="warehouse"
  lang={lang}
  onClose={() => setDetailsMedId(null)}
+ onUpdateMedicine={onUpdateMedicine}
  />
  </div>
  );
