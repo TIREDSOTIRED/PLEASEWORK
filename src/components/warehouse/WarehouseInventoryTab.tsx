@@ -25,6 +25,7 @@ import { CATEGORIES } from '../../data/constants';
 import { translations } from '../../data/translations';
 import StockIntakeModal from './StockIntakeModal';
 import MedicineRow from '../MedicineRow';
+import MedicineDetailsDrawer from '../MedicineDetailsDrawer';
 
 interface InventoryTabProps {
   medicines: Medicine[];
@@ -79,6 +80,8 @@ export default function InventoryTab({
   const [isStockIntakeOpen, setIsStockIntakeOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showLowStockOnly, setShowLowStockOnly] = useState(false);
+ // Phase 2: row details drawer (read-only). id -> medicine resolved at render.
+ const [detailsMedId, setDetailsMedId] = useState<string | null>(null);
   const clickGuardRef = useRef<Set<string>>(new Set());
   // Two-tap arming for high-impact bulk buttons (mistake prevention).
   const [armedQuick, setArmedQuick] = useState<string | null>(null);
@@ -554,7 +557,7 @@ export default function InventoryTab({
  medicine={item}
  role="warehouse"
  lang={lang}
- onSelect={onSelectMedicine}
+ onSelect={(id) => setDetailsMedId(id)}
  onQuickAdjust={(id, delta, note) => (onQuickAdjust || onUpdateStock)(id, delta, note)}
  roleActions={
  <>
@@ -1025,6 +1028,14 @@ export default function InventoryTab({
  onAddMedicine={onAddMedicine || (async () => {})}
  triggerToast={triggerToast}
  initialItem={intakeRequest}
+ />
+
+ {/* Phase 2: read-only medicine details drawer (row tap) */}
+ <MedicineDetailsDrawer
+ medicine={medicines.find(m => m.id === detailsMedId) || null}
+ role="warehouse"
+ lang={lang}
+ onClose={() => setDetailsMedId(null)}
  />
  </div>
  );

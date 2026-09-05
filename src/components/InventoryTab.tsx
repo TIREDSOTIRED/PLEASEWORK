@@ -28,6 +28,7 @@ import SurplusManageModal from './SurplusManageModal';
 import { Skeleton } from './ui/Skeleton';
 import StockIntakeModal from './warehouse/StockIntakeModal';
 import MedicineRow from './MedicineRow';
+import MedicineDetailsDrawer from './MedicineDetailsDrawer';
 
 /** Mirrors the manage-modal listing shape (catalogId-keyed). */
 interface SurplusListing {
@@ -82,6 +83,8 @@ export default function InventoryTab({
  const [isStockIntakeOpen, setIsStockIntakeOpen] = useState(false);
  const [copied, setCopied] = useState(false);
  const [stockFilter, setStockFilter] = useState<'all' | 'low' | 'out' | 'discrepancy'>('all');
+ // Phase 2: row details drawer (read-only). id -> medicine resolved at render.
+ const [detailsMedId, setDetailsMedId] = useState<string | null>(null);
 
  // Surplus Exchange: publish private stock as a marketplace offer
  const [surplusMed, setSurplusMed] = useState<Medicine | null>(null);
@@ -499,7 +502,7 @@ export default function InventoryTab({
   medicine={item}
   role="pharmacy"
   lang={lang}
-  onSelect={onSelectMedicine}
+  onSelect={(id) => setDetailsMedId(id)}
   onQuickAdjust={(id, delta, note) => (onQuickAdjust || onUpdateStock)(id, delta, note)}
   roleActions={
   <button
@@ -732,6 +735,14 @@ export default function InventoryTab({
  lang={lang}
  triggerToast={triggerToast}
  onChanged={loadMySurplusListings}
+ />
+
+ {/* Phase 2: read-only medicine details drawer (row tap) */}
+ <MedicineDetailsDrawer
+ medicine={medicines.find(m => m.id === detailsMedId) || null}
+ role="pharmacy"
+ lang={lang}
+ onClose={() => setDetailsMedId(null)}
  />
  </div>
  );
