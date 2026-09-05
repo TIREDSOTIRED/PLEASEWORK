@@ -162,7 +162,9 @@ export default function MedicineRow({
           </div>
 
           <div className="ms-auto flex items-center gap-1.5">
-            {roleActions}
+            {roleActions ? (
+              <div className="pointer-events-auto flex items-center gap-1.5">{roleActions}</div>
+            ) : null}
 
             <div
               role="group"
