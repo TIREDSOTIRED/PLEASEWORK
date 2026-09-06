@@ -12,6 +12,7 @@ Full architecture and flows are in `README.md` — read that instead of re-explo
 - Verify changes with `npm run lint` (tsc --noEmit) and `npm test` (vitest). Do not run `npm run build` unless asked.
 - When asked "why/how" questions about the codebase, answer from README.md + targeted greps; do not dump file contents back to the user.
 - Keep edits minimal and scoped; do not reformat unrelated code.
+- Whenever a task writes a report under `.gstack/qa-reports/`, immediately open it with `Start-Process <path>` — the user reads reports in their default viewer; do not wait to be asked.
 
 ## Layout
 
