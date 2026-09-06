@@ -166,7 +166,10 @@ export default function MedicineDetailsDrawer({ medicine, role, lang = 'en', onC
       ? 'text-amber-700 bg-amber-50 border-amber-200'
       : 'text-brand-700 bg-brand-50 border-brand-200';
 
-  const fmtDate = (v: any) => (v ? String(v).split('T')[0] : '—');
+  const fmtDate = (v: any) => {
+    if (v && String(v).trim()) return String(v).split('T')[0];
+    return lang === 'ar' ? 'غير معروف' : 'Unknown';
+  };
   const fmtMoney = (v: any) => (Number(v) > 0 ? `${Number(v).toLocaleString()} ${COPY.currency[lang]}` : COPY.unknown[lang]);
 
   const canEdit = typeof onUpdateMedicine === 'function';
@@ -346,7 +349,7 @@ export default function MedicineDetailsDrawer({ medicine, role, lang = 'en', onC
                                   setBatchErrors([]);
                                   setBatchForm({
                                     batchNumber: String(b.batchNumber ?? ''),
-                                    expiryDate: fmtDate(b.expiryDate) === '—' ? '' : fmtDate(b.expiryDate),
+                                    expiryDate: b.expiryDate ? String(b.expiryDate).split('T')[0] : '',
                                     cost: Number(b.cost) > 0 ? String(b.cost) : ''
                                   });
                                 }}

@@ -498,13 +498,13 @@ export default function RootNavigator({
  }
  };
 
- const firestoreCompleteSale = async (cartItems: any[], paymentMethod: string = 'Cash', checkoutSessionId?: string, buyerNote?: string) => {
+ const firestoreCompleteSale = async (cartItems: any[], paymentMethod: string = 'Cash', checkoutSessionId?: string, buyerNote?: string, customerName?: string) => {
  if (!currentSession?.pharmacyId || !db) return { success: false };
  try {
  const employeeId = currentSession.email || 'unknown';
  const saleId = checkoutSessionId || `SALE-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
- const { writeBatch, doc, increment, collection, getDocs } = await import('firebase/firestore');
+ const { writeBatch, doc, increment, collection, getDocs, arrayUnion } = await import('firebase/firestore');
  const batch = writeBatch(db);
 
  const saleRecordItems = [];
@@ -587,11 +587,20 @@ export default function RootNavigator({
  allocations: itemAllocations
  });
 
- // Decrement aggregate stock
+ // Decrement aggregate stock + append a truthful history entry so the
+ // medicine's Recent Activity shows WHY stock changed (P2 #12 — sales were
+ // previously invisible there).
  const medRef = doc(db, 'tenants', currentSession.pharmacyId, 'storage_inventory', safeMedId);
  batch.update(medRef, {
  stock: increment(-cartItem.quantitySold),
- lastUpdated: new Date().toISOString()
+ lastUpdated: new Date().toISOString(),
+ history: arrayUnion({
+ id: `hist-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+ timestamp: new Date().toISOString(),
+ type: 'stock_sold',
+ note: `Sold to ${paymentMethod === 'Credit' && customerName ? customerName : 'walk-in customer'} (invoice ${saleId})`,
+ quantityChange: -cartItem.quantitySold
+ })
  });
 
  // Offer availability mirror — wholesale/surplus offers of this SKU track
@@ -616,6 +625,9 @@ export default function RootNavigator({
  status: paymentMethod === 'Credit' ? 'Pending' : 'Paid',
  paymentMethod,
  employeeId,
+ // P1 #3: the debtor on a credit sale — receivables are grouped by this
+ // name in the Financial Ledger; settlements attach to it.
+ ...(customerName ? { customerName: customerName.trim() } : {}),
  // Off-app orders (WhatsApp/phone) carry the buyer context for the ledger.
  ...(buyerNote ? { note: buyerNote } : {})
  };
@@ -661,15 +673,63 @@ export default function RootNavigator({
  }
  };
 
- /** Off-app order (WhatsApp/phone): single-item dispatch through the same
-  *  FEFO sale engine so ledger, profit and stock stay truthful. */
- const firestoreExternalSale = (med: Medicine, qty: number, payment: 'Cash' | 'Credit') => {
- if (!Number(qty)) return Promise.resolve({ success: false, error: 'Qty must be > 0' });
- return firestoreCompleteSale(
- [{ medId: med.id, name: med.name, quantitySold: qty, priceAtSale: med.price || 0 }],
- payment
- ) as Promise<{ success: boolean; error?: string }>;
- };
+  /** Off-app order (WhatsApp/phone): single-item dispatch through the same
+   *  FEFO sale engine so ledger, profit and stock stay truthful. */
+  const firestoreExternalSale = (med: Medicine, qty: number, payment: 'Cash' | 'Credit') => {
+  if (!Number(qty)) return Promise.resolve({ success: false, error: 'Qty must be > 0' });
+  return firestoreCompleteSale(
+  [{ medId: med.id, name: med.name, quantitySold: qty, priceAtSale: med.price || 0 }],
+  payment
+  ) as Promise<{ success: boolean; error?: string }>;
+  };
+
+  /**
+   * P1 #4 — customer debt settlement. Append-only: a NEW ledger document of
+   * type CREDIT_SETTLEMENT records the payment; NO sale document is ever
+   * rewritten or deleted. Partial payments are natural (amount < balance);
+   * the remaining balance is always COMPUTED by the ledger views
+   * (computeCustomerBalances) rather than stored on the sale.
+   */
+  const recordCustomerPayment = async (customerName: string, amountPaid: number, note?: string): Promise<boolean> => {
+  if (!currentSession?.pharmacyId || !db) return false;
+  const name = (customerName || '').trim();
+  const amount = Number(amountPaid);
+  if (!name || !amount || amount <= 0) {
+  triggerToast(
+  lang === 'ar' ? 'أدخل اسم العميل ومبلغاً صحيحاً.' : 'Enter the customer name and a valid amount.',
+  'error'
+  );
+  return false;
+  }
+  try {
+  const { collection: coll, addDoc: add } = await import('firebase/firestore');
+  await add(coll(db, 'tenants', currentSession.pharmacyId, 'ledger'), {
+  saleId: `PAYMENT-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+  timestamp: new Date().toISOString(),
+  type: 'CREDIT_SETTLEMENT',
+  customerName: name,
+  amountPaid: amount,
+  paymentMethod: 'Cash',
+  status: 'Paid',
+  employeeId: currentSession.email || 'unknown',
+  ...(note ? { note } : {})
+  });
+  triggerToast(
+  lang === 'ar'
+  ? `تم تسجيل دفعة ${amount.toLocaleString()} ل.س من ${name}.`
+  : `Recorded ${amount.toLocaleString()} SYP payment from ${name}.`,
+  'success'
+  );
+  return true;
+  } catch (err: any) {
+  console.warn('Customer payment failed:', err);
+  triggerToast(
+  lang === 'ar' ? 'فشل تسجيل الدفعة.' : 'Failed to record the payment.',
+  'error'
+  );
+  return false;
+  }
+  };
 
  if (isLoading) {
  return (
@@ -826,14 +886,14 @@ export default function RootNavigator({
  <POSCashierView
  medicines={medicines}
  onAddMedicine={firestoreAddMedicine}
- onCompleteSale={async (cartItems: any[], paymentMethod: string = 'Cash', checkoutSessionId?: string) => {
+ onCompleteSale={async (cartItems: any[], paymentMethod: string = 'Cash', checkoutSessionId?: string, customerName?: string) => {
  try {
  // We removed the optimistic local state updates because 
  // Firestore's persistent local cache will instantly fire onSnapshot
  // for the inventory and ledger collections, keeping the UI perfectly in sync.
  // @ts-ignore
  if (typeof firestoreCompleteSale === 'function') {
- const res = await firestoreCompleteSale(cartItems, paymentMethod, checkoutSessionId);
+ const res = await firestoreCompleteSale(cartItems, paymentMethod, checkoutSessionId, undefined, customerName);
  if (res && !res.success) {
  triggerToast(res.error || 'Checkout failed', 'error');
  return { success: false, error: res.error };
@@ -849,6 +909,8 @@ export default function RootNavigator({
  lang={lang}
  triggerToast={triggerToast}
  externalScannedCode={pendingPosScan}
+ pharmacyName={activePharmacy?.displayName || activePharmacy?.name}
+ hasCompletedSale={(salesLogs || []).length > 0}
  />
  )}
 
@@ -885,6 +947,7 @@ export default function RootNavigator({
   medicines={medicines}
   lang={lang}
   triggerToast={triggerToast}
+  onRecordPayment={recordCustomerPayment}
   />
   ) : (
   activePharmacy?.tenantType === "WHOLESALE_WAREHOUSE" ? (

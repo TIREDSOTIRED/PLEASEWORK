@@ -113,7 +113,13 @@ export function planBatchMetadataUpdate(
 
   if (patch.expiryDate !== undefined) {
     if (String(patch.expiryDate).trim() === '') {
-      errors.push({ field: 'expiryDate', message: 'Enter a valid expiry date' });
+      // Explicit clear → expiry becomes honestly Unknown (P1 #5). FEFO treats
+      // unknown-expiry batches as last-resort stock.
+      const cur = String(current.expiryDate ?? '').trim();
+      if (cur) {
+        writes.expiryDate = '';
+        changes.push({ field: 'expiryDate', from: cur, to: 'Unknown' });
+      }
     } else {
       const iso = isoOf(patch.expiryDate);
       if (!iso) {

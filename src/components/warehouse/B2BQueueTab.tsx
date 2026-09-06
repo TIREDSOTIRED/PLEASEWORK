@@ -790,7 +790,7 @@ export default function B2BQueueTab({ activeTenantId, triggerToast, lang = 'ar' 
                           <span className="text-xs text-brand-700 font-bold">{lang === 'ar' ? 'ل.س' : 'SYP'}</span>
                         </div>
                         <span className="text-[10px] text-slate-600 font-mono block mt-0.5">
-                          {order.items.length} {lang === 'ar' ? 'أصناف دوائية مطلوبة' : 'line items requested'}
+                          {(order.items || []).length} {lang === 'ar' ? 'أصناف دوائية مطلوبة' : 'line items requested'}
                         </span>
                       </div>
                     </div>
@@ -808,7 +808,7 @@ export default function B2BQueueTab({ activeTenantId, triggerToast, lang = 'ar' 
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100 text-xs">
-                        {order.items.map((item, idx) => {
+                        {(order.items || []).map((item, idx) => {
                           const itemName = (lang === 'ar' && item.nameAr) ? item.nameAr : item.name;
                           return (
                             <tr key={idx} className="hover:bg-slate-50/80 transition-colors">
@@ -1079,7 +1079,7 @@ export default function B2BQueueTab({ activeTenantId, triggerToast, lang = 'ar' 
                 </div>
                 <div className="flex justify-between text-slate-600">
                   <span>{lang === 'ar' ? 'إجمالي الأصناف:' : 'Total Items:'}</span>
-                  <span className="font-bold text-slate-900">{orderToReject.items.length} {lang === 'ar' ? 'أصناف' : 'items'}</span>
+                  <span className="font-bold text-slate-900">{(orderToReject.items || []).length} {lang === 'ar' ? 'أصناف' : 'items'}</span>
                 </div>
                 <div className="flex justify-between text-slate-600">
                   <span>{lang === 'ar' ? 'القيمة الإجمالية:' : 'Total Value:'}</span>

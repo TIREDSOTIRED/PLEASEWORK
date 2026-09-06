@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useAuth } from '../../application/auth/AuthContext';
+import { useAuth, pendingOrgKey } from '../../application/auth/AuthContext';
 import { 
   Building2, 
   MapPin, 
@@ -24,11 +24,31 @@ interface OnboardingProps {
 export default function PharmacyOnboarding({ lang = 'en', setLang }: OnboardingProps) {
   const { currentSession, completeOnboarding, logout, isLoading, error } = useAuth();
   
-  const [step, setStep] = useState<1 | 2>(1);
-  const [tenantType, setTenantType] = useState<'RETAIL_PHARMACY' | 'WHOLESALE_WAREHOUSE'>('RETAIL_PHARMACY');
-  const [name, setName] = useState('');
-  const [location, setLocation] = useState('Damascus, Syria');
-  const [phone, setPhone] = useState('');
+  // P1 #8 — de-duplicate onboarding: the signup flow already collected the
+  // organization details (before the verification wall). Pre-fill everything
+  // from that saved snapshot and skip the type-selection step when known, so
+  // the pharmacist never answers the same questions twice.
+  const pendingOrg = (() => {
+    try {
+      const uid = (currentSession as any)?.userId;
+      if (!uid) return null;
+      const raw = localStorage.getItem(pendingOrgKey(uid));
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  })();
+
+  const [step, setStep] = useState<1 | 2>(pendingOrg?.orgName ? 2 : 1);
+  const [tenantType, setTenantType] = useState<'RETAIL_PHARMACY' | 'WHOLESALE_WAREHOUSE'>(
+    pendingOrg?.tenantType === 'WHOLESALE_WAREHOUSE' ? 'WHOLESALE_WAREHOUSE' : 'RETAIL_PHARMACY'
+  );
+  const [name, setName] = useState(pendingOrg?.orgName || '');
+  const [location, setLocation] = useState(pendingOrg?.location || 'Damascus, Syria');
+  const [phone, setPhone] = useState(pendingOrg?.contactPhone || '');
+  // P1 #8 — license number is captured when the pharmacist HAS one; the
+  // status stays honestly "PENDING" until real verification exists.
+  const [licenseNumber, setLicenseNumber] = useState('');
   const [localError, setLocalError] = useState<string | null>(null);
 
   // Legal Consent
@@ -43,9 +63,9 @@ export default function PharmacyOnboarding({ lang = 'en', setLang }: OnboardingP
     (currentSession?.associatedTenantIds && currentSession.associatedTenantIds.length > 0);
 
   const handleStep1Next = () => {
-    if (!name) {
-      setName(tenantType === 'RETAIL_PHARMACY' ? 'Damascus Central Pharmacy' : 'Syrian Med Supply Hub');
-    }
+    // P1 #8: no fabricated placeholder names. The step-2 form validates the
+    // real name; leaving it empty surfaces a clear error instead of silently
+    // creating "Damascus Central Pharmacy".
     setStep(2);
   };
 
@@ -62,7 +82,7 @@ export default function PharmacyOnboarding({ lang = 'en', setLang }: OnboardingP
       return;
     }
 
-    await completeOnboarding(name.trim(), location.trim(), phone.trim(), tenantType);
+    await completeOnboarding(name.trim(), location.trim(), phone.trim(), tenantType, licenseNumber.trim() || undefined);
   };
 
   if (hasExistingWorkspaces) {
@@ -310,6 +330,27 @@ export default function PharmacyOnboarding({ lang = 'en', setLang }: OnboardingP
                     onChange={(e) => setPhone(e.target.value)}
                     className="w-full pl-10 rtl:pl-4 rtl:pr-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all"
                     placeholder="+963 11 222 3344"
+                  />
+                </div>
+              </div>
+
+              {/* P1 #8 — capture the REAL license number when the pharmacist
+                  has one. Status is never fabricated: without a number the
+                  profile honestly stays "PENDING". */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                  {isArabic ? 'رقم الإجازة الصحية (اختياري)' : 'Pharmacy License # (Optional)'}
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 rtl:left-auto rtl:right-0 pl-3 rtl:pl-0 rtl:pr-3 flex items-center pointer-events-none text-slate-400">
+                    <ShieldCheck className="w-4 h-4" />
+                  </div>
+                  <input
+                    type="text"
+                    value={licenseNumber}
+                    onChange={(e) => setLicenseNumber(e.target.value)}
+                    className="w-full pl-10 rtl:pl-4 rtl:pr-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition-all"
+                    placeholder={isArabic ? 'مثال: PHAR-LIC-0000-SY' : 'e.g. PHAR-LIC-0000-SY'}
                   />
                 </div>
               </div>

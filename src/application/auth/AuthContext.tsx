@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { UserSession, UserRole } from "../../domain/auth";
 import { PharmacyProfile, TenantType } from "../../domain/tenant";
-import { auth, db, isFirebaseConfigured } from "../../infrastructure/firebase";
+import { auth, db, isFirebaseConfigured, firebaseConfig } from "../../infrastructure/firebase";
 import { 
   onAuthStateChanged, 
   signInWithPopup, 
@@ -26,6 +26,7 @@ interface AuthContextType {
   loginWithGoogle: () => Promise<void>;
   signUpWithGoogle: () => Promise<void>;
   resetPassword: (email: string) => Promise<boolean>;
+  resendVerificationEmail: (email: string, pass: string) => Promise<boolean>;
   loginWithEmail: (email: string, pass: string) => Promise<boolean>;
   signUpWithEmail: (
     email: string, 
@@ -68,6 +69,18 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
  */
 export const REQUIRE_VERIFIED_EMAIL = true;
 
+/**
+ * Canonical user-facing message shown when a fresh signup is bounced to the
+ * verification wall. AuthScreen matches on this constant to offer the
+ * "Resend verification email" recovery panel (never a bypass).
+ */
+export const VERIFICATION_REQUIRED_MSG =
+  "Please verify your email address before signing in — check your inbox.";
+
+/** LocalStorage key holding the org details captured during signup so the
+ *  post-verification onboarding does not ask the identical questions twice. */
+export const pendingOrgKey = (userId: string) => `eshmun_pending_org_${userId}`;
+
 export function mapAuthErrorMessage(err: any): string {
   if (!err) return "An unexpected error occurred. Please try again.";
   const code = err.code || "";
@@ -101,6 +114,25 @@ export function mapAuthErrorMessage(err: any): string {
   if (code === 'auth/requires-recent-login') {
     return "Session expired. Please sign in again.";
   }
+  if (code === 'auth/operation-not-allowed') {
+    return "New account registration is temporarily unavailable. Please try again later or contact support.";
+  }
+  if (code === 'auth/unauthorized-domain') {
+    return "Sign-in from this address is not allowed. Please open the app from its official web address.";
+  }
+  if (code === 'auth/user-disabled') {
+    return "This account has been disabled. Please contact support.";
+  }
+  // Identity Toolkit REST codes (verification resend path)
+  if (code === 'EMAIL_NOT_FOUND') {
+    return "Incorrect email or password. Please verify your credentials.";
+  }
+  if (code === 'INVALID_PASSWORD' || code === 'INVALID_LOGIN_CREDENTIALS') {
+    return "Incorrect email or password. Please verify your credentials.";
+  }
+  if (code === 'USER_DISABLED') {
+    return "This account has been disabled. Please contact support.";
+  }
   return msg || "Authentication failed. Please check your credentials.";
 }
 
@@ -125,7 +157,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // pre-verified). Active only when REQUIRE_VERIFIED_EMAIL is flipped on.
         if (REQUIRE_VERIFIED_EMAIL && !user.emailVerified && user.providerData.some(p => p.providerId === 'password')) {
           await signOut(auth);
-          setError("Please verify your email address (check your inbox), then sign in again.");
+          setError(VERIFICATION_REQUIRED_MSG);
           setIsLoading(false);
           return;
         }
@@ -360,7 +392,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     pharmacyName: string, 
     location: string, 
     contactPhone: string, 
-    tenantType: TenantType = "RETAIL_PHARMACY"
+    tenantType: TenantType = "RETAIL_PHARMACY",
+    licenseNo?: string
   ) => {
     if (!currentSession) return;
     setIsLoading(true);
@@ -381,7 +414,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         verifiedLocation: location.trim() || "Damascus, Syria",
         contactPhone: contactPhone.trim(),
         tier: "STANDARD",
-        licenseNumber: "PENDING",
+        // P1 #8: the REAL license number when the pharmacist provided one;
+        // otherwise an honest PENDING status — never a fabricated license.
+        licenseNumber: licenseNo?.trim() || "PENDING",
         location: { city: cityName || "Damascus", zone: "" },
         createdAt: new Date().toISOString(),
         createdByUid: currentSession.userId,
@@ -420,6 +455,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } : null);
 
       setActivePharmacy(newTenant);
+
+      // P1 #8: the pending signup snapshot has served its purpose.
+      try {
+        if (currentSession.userId) localStorage.removeItem(pendingOrgKey(currentSession.userId));
+      } catch (e) {}
     } catch (err: any) {
       console.warn("Onboarding failed:", err);
       setError(mapAuthErrorMessage(err) || "Failed to create organization profile. Please try again.");
@@ -462,9 +502,63 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setIsLoading(false);
       return true;
     } catch (err: any) {
-      console.warn("Password reset failed:", err);
+      console.warn("Login failed:", err);
       setError(mapAuthErrorMessage(err));
       setIsLoading(false);
+      return false;
+    }
+  };
+
+  /**
+   * Resend the email-verification link for an account that is stuck at the
+   * verification wall (P1 #2 recovery path). Uses the official Identity
+   * Toolkit REST flow (signInWithPassword → sendOobCode VERIFY_EMAIL); it
+   * authenticates the caller with real credentials and NEVER bypasses the
+   * verification gate. Google-identity accounts are already verified and get
+   * a clear message instead.
+   */
+  const resendVerificationEmail = async (email: string, pass: string): Promise<boolean> => {
+    setError(null);
+    if (!isFirebaseConfigured || !firebaseConfig?.apiKey) {
+      setError("Firebase is not configured.");
+      return false;
+    }
+    try {
+      const key = firebaseConfig.apiKey;
+      const signInRes = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${key}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: email.trim(), password: pass, returnSecureToken: true })
+        }
+      );
+      const signInData = await signInRes.json();
+      if (!signInRes.ok || !signInData.idToken) {
+        setError(mapAuthErrorMessage({ code: signInData.error?.message?.split(': ')[0] || 'auth/invalid-credential' }));
+        return false;
+      }
+      if (signInData.emailVerified) {
+        setError(null);
+        return true; // already verified — caller can just sign in
+      }
+      const oobRes = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${key}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requestType: 'VERIFY_EMAIL', idToken: signInData.idToken })
+        }
+      );
+      if (!oobRes.ok) {
+        const oobData = await oobRes.json();
+        setError(mapAuthErrorMessage({ code: oobData.error?.message?.split(': ')[0] || 'auth/too-many-requests' }));
+        return false;
+      }
+      return true;
+    } catch (err: any) {
+      console.warn("Verification resend failed:", err);
+      setError(mapAuthErrorMessage(err));
       return false;
     }
   };
@@ -514,8 +608,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // (module scope) — also checked in onAuthStateChanged at login time.
       try { await sendEmailVerification(cred.user); } catch (vErr) { console.warn("Verification email skipped:", vErr); }
       if (REQUIRE_VERIFIED_EMAIL && !cred.user.emailVerified) {
+        // Preserve the org details captured at signup so the post-verification
+        // onboarding can pre-fill them instead of asking the same questions
+        // twice (P1 #8 — duplicate onboarding).
+        if (tenantType && orgName && orgName.trim()) {
+          try {
+            localStorage.setItem(pendingOrgKey(userId), JSON.stringify({
+              tenantType, orgName: orgName.trim(), location: location?.trim() || '', contactPhone: contactPhone?.trim() || ''
+            }));
+          } catch (e) {}
+        }
         await signOut(auth);
-        setError("Please verify your email address before signing in — check your inbox.");
+        setError(VERIFICATION_REQUIRED_MSG);
         setIsLoading(false);
         return false;
       }
@@ -778,6 +882,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loginWithGoogle, 
       signUpWithGoogle,
       resetPassword,
+      resendVerificationEmail,
       loginWithEmail, 
       signUpWithEmail, 
       logout, 

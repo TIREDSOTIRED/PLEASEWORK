@@ -13,6 +13,7 @@ const firebaseConfig = {
 };
 
 export const isFirebaseConfigured = true;
+export { firebaseConfig };
 
 let app;
 let auth: any = null;

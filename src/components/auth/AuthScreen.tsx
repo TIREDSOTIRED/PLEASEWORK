@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
-import { useAuth } from '../../application/auth/AuthContext';
+import React, { useState, useEffect } from 'react';
+import { useAuth, VERIFICATION_REQUIRED_MSG } from '../../application/auth/AuthContext';
 import { useUI } from '../../context/UIContext';
 import LegalModal from './LegalModal';
 import { 
   HeartPulse, 
   Mail, 
+  MailCheck, 
   Lock, 
   Eye, 
   EyeOff, 
@@ -42,6 +43,7 @@ export default function AuthScreen({ lang = 'en', setLang }: AuthScreenProps) {
     loginWithGoogle, 
     signUpWithGoogle, 
     resetPassword,
+    resendVerificationEmail,
     isLoading, 
     error, 
     setError, 
@@ -76,6 +78,13 @@ export default function AuthScreen({ lang = 'en', setLang }: AuthScreenProps) {
   // Local state & feedback
   const [localError, setLocalError] = useState<string | null>(null);
   const [resetSuccessMessage, setResetSuccessMessage] = useState<string | null>(null);
+
+  // Email-verification recovery panel (P1 #2): offered whenever the auth
+  // context bounces the user to the verification wall — after signup OR a
+  // sign-in attempt with an unverified password account.
+  const [showVerifyPanel, setShowVerifyPanel] = useState(false);
+  const [resendLoading, setResendLoading] = useState(false);
+  const [resendNote, setResendNote] = useState<{ ok: boolean; msg: string } | null>(null);
 
   const isArabic = lang === 'ar';
 
@@ -205,6 +214,10 @@ export default function AuthScreen({ lang = 'en', setLang }: AuthScreenProps) {
   };
 
   const activeError = localError || error;
+
+  useEffect(() => {
+    if (activeError === VERIFICATION_REQUIRED_MSG) setShowVerifyPanel(true);
+  }, [activeError]);
   const isDuplicateAccountError = 
     activeError?.includes('already exists') || 
     activeError?.includes('موجود مسبقاً') || 
@@ -333,6 +346,83 @@ export default function AuthScreen({ lang = 'en', setLang }: AuthScreenProps) {
                 <p className="font-medium leading-relaxed">{resetSuccessMessage}</p>
               </div>
             )}
+
+            {/* ================================================= */}
+            {/* 0. EMAIL VERIFICATION RECOVERY PANEL (P1 #2)      */}
+            {/* Shown when a signup/login is bounced to the        */}
+            {/* verification wall. Offers a real resend action —   */}
+            {/* never a bypass.                                    */}
+            {/* ================================================= */}
+            {showVerifyPanel && (
+              <div className="space-y-4">
+                <div className="text-center pb-1">
+                  <div className="inline-flex w-12 h-12 rounded-xl bg-brand-100 text-brand-700 items-center justify-center mb-2">
+                    <MailCheck className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-sm font-bold text-slate-800">
+                    {isArabic ? 'أكّد بريدك الإلكتروني' : 'Confirm your email address'}
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                    {isArabic
+                      ? 'أرسلنا رابط تأكيد إلى بريدك. افتح الرابط ثم سجّل الدخول. إن لم يصلك البريد، أعد إرساله من هنا.'
+                      : 'We sent a confirmation link to your email. Open it, then sign in. If it never arrived, resend it from here.'}
+                  </p>
+                </div>
+
+                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700 font-medium truncate text-center" dir="ltr">
+                  {email || '—'}
+                </div>
+
+                {resendNote && (
+                  <div className={`p-3 rounded-xl text-xs font-semibold flex items-start gap-2 border ${
+                    resendNote.ok
+                      ? 'bg-brand-50 text-brand-800 border-brand-200/80'
+                      : 'bg-red-50 text-red-700 border-red-200/80'
+                  }`}>
+                    {resendNote.ok
+                      ? <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                      : <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />}
+                    <p className="leading-relaxed">{resendNote.msg}</p>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  disabled={resendLoading || !email || !password}
+                  onClick={async () => {
+                    setResendLoading(true);
+                    setResendNote(null);
+                    try {
+                      const okResend = await resendVerificationEmail(email, password);
+                      setResendNote(okResend
+                        ? { ok: true, msg: isArabic ? 'تم إرسال رابط التأكيد — تحقق من صندوق الوارد وبريد spam.' : 'Confirmation link sent — check your inbox and spam folder.' }
+                        : { ok: false, msg: activeError || (isArabic ? 'فشل إعادة الإرسال. حاول لاحقاً.' : 'Resend failed. Try again shortly.') });
+                    } finally {
+                      setResendLoading(false);
+                    }
+                  }}
+                  className="w-full py-3 bg-brand-600 hover:bg-brand-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white rounded-xl font-bold text-xs sm:text-sm shadow-md shadow-brand-600/20 flex items-center justify-center gap-2 transition-all cursor-pointer"
+                >
+                  {resendLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <MailCheck className="w-4 h-4" />}
+                  <span>{isArabic ? 'إعادة إرسال رابط التأكيد' : 'Resend verification email'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowVerifyPanel(false);
+                    setResendNote(null);
+                    clearError();
+                    handleModeSwitch('signin');
+                  }}
+                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs transition-colors cursor-pointer"
+                >
+                  {isArabic ? 'العودة لتسجيل الدخول' : 'Back to Sign In'}
+                </button>
+              </div>
+            )}
+
+            {!showVerifyPanel && (<>
 
             {/* ================================================= */}
             {/* 1. SIGN IN VIEW */}
@@ -931,6 +1021,7 @@ export default function AuthScreen({ lang = 'en', setLang }: AuthScreenProps) {
                 )}
               </div>
             )}
+            </>)}
           </div>
 
           {/* Footer Helper (Only shown when not in Forgot Password) */}

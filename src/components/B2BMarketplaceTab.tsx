@@ -34,8 +34,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import { IndexedDbB2BOrderRepository } from '../infrastructure/storage/IndexedDbB2BOrderRepository';
 import { useAuth } from '../application/auth/AuthContext';
 import { db } from '../infrastructure/firebase';
-import { collection, query, where, onSnapshot, setDoc, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, setDoc, doc, updateDoc, getDoc } from 'firebase/firestore';
 import { confirmWarehouseOrderReceipt } from '../infrastructure/b2b/confirmWarehouseOrderReceipt';
+import { isResolvableSellerId, resolveOfferSeller, type AuthoritativeTenant } from '../domain/b2b/sellerResolution';
 import { StatusBadge } from './ui/StatusBadge';
 import OrderReceiptDocument from './receipts/OrderReceiptDocument';
 import { Badge } from './ui/Badge';
@@ -499,6 +500,21 @@ export default function B2BMarketplaceTab({ triggerToast, lang }: B2BMarketplace
     const offer = offers.find(o => o.id === id || o.offerId === id);
     const prevQty = cart[id] || 0;
 
+    // P0 seller-routing guard: an offer whose seller identity is missing or a
+    // known ghost placeholder can never produce a deliverable PO. Block the
+    // add here so the buyer never builds an order the seller will never see.
+    if (offer && requestedQty > 0 && !isResolvableSellerId(offer.sellerTenantId)) {
+      if (triggerToast) {
+        triggerToast(
+          lang === 'ar'
+            ? 'هذا العرض غير متاح حالياً — لا يمكن التحقق من هوية البائع.'
+            : 'This offer is currently unavailable — the seller could not be verified.',
+          'error'
+        );
+      }
+      return;
+    }
+
     if (requestedQty <= 0) {
       setCart(prev => {
         const next = { ...prev };
@@ -585,7 +601,13 @@ export default function B2BMarketplaceTab({ triggerToast, lang }: B2BMarketplace
       }
 
       let validationError: string | undefined;
-      if (!offer.active) {
+      if (!isResolvableSellerId(offer.sellerTenantId)) {
+        // P0 seller routing: legacy/ghost seller identity — ordering blocked
+        // up front instead of silently creating an order no seller receives.
+        validationError = lang === 'ar'
+          ? 'العرض غير متاح — لا يمكن التحقق من البائع'
+          : 'Offer unavailable — seller could not be verified';
+      } else if (!offer.active) {
         validationError = lang === 'ar' ? 'العرض غير نشط حالياً' : 'Offer is no longer active';
       } else if (offer.availableQuantity < qty) {
         validationError = lang === 'ar' ? `المتوفر فقط ${offer.availableQuantity} عبوة` : `Only ${offer.availableQuantity} units available`;
@@ -657,7 +679,31 @@ export default function B2BMarketplaceTab({ triggerToast, lang }: B2BMarketplace
 
       for (const group of warehouseGroups) {
         try {
-        const sellerTenantId = group.sellerTenantId || 'wh_default';
+        // P0 seller routing: resolve the REAL seller from the authoritative
+        // tenant document before writing anything. A stale/ghost identity on
+        // the offer must fail LOUDLY here — never produce a PO the actual
+        // seller will never receive.
+        const { getDoc: getTenantDoc } = await import('firebase/firestore');
+        let authoritativeTenant: AuthoritativeTenant | null = null;
+        if (isResolvableSellerId(group.sellerTenantId) && db) {
+          const tenantSnap = await getTenantDoc(doc(db, 'tenants', String(group.sellerTenantId)));
+          if (tenantSnap.exists()) {
+            authoritativeTenant = { ...(tenantSnap.data() as any), id: tenantSnap.id };
+          }
+        }
+        const sellerResolution = resolveOfferSeller(
+          { sellerTenantId: group.sellerTenantId, sellerName: group.sellerName, offerKind: (group.items[0]?.offer as any)?.offerKind },
+          authoritativeTenant
+        );
+        if (!sellerResolution.ok) {
+          throw new Error(
+            lang === 'ar'
+              ? `العرض غير متاح حالياً — تعذّر التحقق من هوية البائع (${group.sellerName}). لم يتم إنشاء الطلبية.`
+              : `Offer currently unavailable — seller "${group.sellerName}" could not be verified. Order NOT placed.`
+          );
+        }
+
+        const sellerTenantId = sellerResolution.sellerTenantId;
         const orderId = `PO-${Math.floor(1000 + Math.random() * 9000)}-${Date.now().toString().slice(-4)}`;
         const orderTotalValue = group.subtotalSyp;
         const orderTotalQty = group.itemCount;
@@ -674,9 +720,11 @@ export default function B2BMarketplaceTab({ triggerToast, lang }: B2BMarketplace
           buyerPhone: buyerPhone,
           buyerLicense: buyerLicense,
           sellerTenantId: sellerTenantId,
-          sellerName: group.sellerName,
-          sellerType: (group as any).sellerType || 'WHOLESALE_WAREHOUSE',
-          ...(group.sellerCity ? { sellerCity: group.sellerCity } : {}),
+          // Live tenant identity is authoritative — replaces stale
+          // denormalized names (e.g. pre-rename warehouse names).
+          sellerName: sellerResolution.sellerName,
+          sellerType: sellerResolution.sellerType,
+          ...(sellerResolution.sellerCity ? { sellerCity: sellerResolution.sellerCity } : {}),
           status: 'PENDING_APPROVAL',
           // Canonical 'Cash' | 'Credit' (POS vocabulary) — normalized from
           // the checkout's lowercase paymentType. Historical orders lack
@@ -711,7 +759,7 @@ export default function B2BMarketplaceTab({ triggerToast, lang }: B2BMarketplace
 
         createdOrdersSummary.push({
           orderId,
-          warehouseName: group.sellerName,
+          warehouseName: sellerResolution.sellerName,
           itemCount: orderTotalQty,
           totalSyp: orderTotalValue,
           status: 'PENDING_APPROVAL'
@@ -1202,6 +1250,18 @@ export default function B2BMarketplaceTab({ triggerToast, lang }: B2BMarketplace
                                       </span>
                                     ))}
                                   </div>
+                                </div>
+                              )}
+
+                              {/* P0 seller routing: legacy/unverified seller identity */}
+                              {!isResolvableSellerId(wh.id) && (
+                                <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl px-3 py-2 text-[11px] font-bold flex items-center gap-2">
+                                  <span>⚠️</span>
+                                  <span>
+                                    {lang === 'ar'
+                                      ? 'عروض هذا البائع غير متاحة حالياً — تعذّر التحقق من حسابه.'
+                                      : 'Offers from this seller are currently unavailable — their account could not be verified.'}
+                                  </span>
                                 </div>
                               )}
                             </div>

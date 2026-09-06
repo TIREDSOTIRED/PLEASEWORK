@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { useCatalog } from '../../context/CatalogContext';
 import { Medicine } from '../../types';
+import { dedupeCatalogSuggestions } from '../../domain/catalog/dedupeSuggestions';
 import { useAuth } from '../../application/auth/AuthContext';
 import { HardwareIntegrationService } from '../../infrastructure/hardware/HardwareIntegrationService';
 import CentralScannerModal, { CatalogItem } from '../scanner/CentralScannerModal';
@@ -21,6 +22,12 @@ interface StockIntakeModalProps {
   triggerToast: (msg: string, type: 'success' | 'error' | 'info' | 'warning') => void;
   /** Optional catalog item to prefill intake (catalog → warehouse inventory entry). */
   initialItem?: any | null;
+  /**
+   * Current inventory snapshot. When the picked catalog item already exists in
+   * the pharmacy's ledger, the medicine-level selling price is KEPT (P1 #6)
+   * and the pharmacist focuses on batch-level details only.
+   */
+  existingMedicines?: Medicine[];
 }
 
 const COMMON_DOSAGE_FORMS = [
@@ -40,7 +47,8 @@ export default function StockIntakeModal({
   lang = 'ar', 
   onAddMedicine, 
   triggerToast,
-  initialItem
+  initialItem,
+  existingMedicines = []
 }: StockIntakeModalProps) {
   const { catalogRaw, findByBarcode, findByBarcodeRemote, searchCatalogRemote } = useCatalog();
   const { currentSession } = useAuth();
@@ -48,6 +56,22 @@ export default function StockIntakeModal({
   // Scanner state - open camera scanner automatically on launch
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [hasScannedOnce, setHasScannedOnce] = useState(false);
+  // P1 #6: true when the selected catalog item resolves to medicine already
+  // in the ledger — the selling price is then pre-filled from that medicine.
+  const [isRestockOfExisting, setIsRestockOfExisting] = useState(false);
+
+  /** Deterministic match of a catalog item against current inventory:
+   *  barcode → catalogId → exact normalized name. No fuzzy guessing. */
+  const findExistingMedicine = (item: any, barcode: string): Medicine | undefined => {
+    if (!existingMedicines?.length) return undefined;
+    const catId = String(item?.id || item?.catalogId || item?.code || '').replace(/\//g, '_');
+    const norm = (v: any) => String(v || '').trim().toLowerCase();
+    return existingMedicines.find(m =>
+      (barcode && norm(m.barcode) === norm(barcode)) ||
+      (catId && m.catalogId === catId) ||
+      (norm(m.name) && norm(m.name) === norm(item?.name || item?.name_en || item?.tradeNameEn))
+    );
+  };
 
   // Intake Mode: 'catalog' (resolved from database) or 'manual' (unregistered / custom medicine)
   const [isManualMode, setIsManualMode] = useState(false);
@@ -77,12 +101,9 @@ export default function StockIntakeModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [successData, setSuccessData] = useState<{ name: string; quantity: number; expiry: string } | null>(null);
 
-  // Auto-generate default expiry date (1 year in the future)
-  const getDefaultExpiryDate = () => {
-    const d = new Date();
-    d.setFullYear(d.getFullYear() + 1);
-    return d.toISOString().split('T')[0];
-  };
+  // P1 #5: NO fabricated expiry. Unknown expiry stays Unknown — the
+  // pharmacist enters the real date from the box, or leaves it empty.
+  const getDefaultExpiryDate = () => '';
 
   // Auto-generate default batch code
   const generateDefaultBatch = () => {
@@ -109,6 +130,7 @@ export default function StockIntakeModal({
     setBatchNumber(generateDefaultBatch());
     setSuccessData(null);
     setHasScannedOnce(false);
+    setIsRestockOfExisting(false);
   }, []);
 
   // When modal is opened, reset and launch camera scanner immediately —
@@ -141,8 +163,10 @@ export default function StockIntakeModal({
         setIsManualMode(false);
         setIsScannerOpen(false);
       } else {
-        // Launch camera scanner directly on open
-        setIsScannerOpen(true);
+        // P2 #11: the camera scanner is an EXPLICIT choice. Open the form on
+        // the search/manual path; "Scan Barcode Camera" launches the scanner
+        // on demand. A missing/failed camera must never block manual entry.
+        setIsScannerOpen(false);
       }
     } else {
       setIsScannerOpen(false);
@@ -165,8 +189,12 @@ export default function StockIntakeModal({
       }
       setIsSearching(true);
       try {
-        const results = await searchCatalogRemote(debouncedQuery.trim(), 8);
-        if (isMounted) setSuggestions(results || []);
+        const results = await searchCatalogRemote(debouncedQuery.trim(), 12);
+        if (isMounted) {
+          // P2 #10: collapse exact duplicate catalog entries so the
+          // pharmacist never chooses blindly between identical products.
+          setSuggestions(dedupeCatalogSuggestions(results || []));
+        }
       } catch (e) {
         console.error(e);
       } finally {
@@ -206,13 +234,25 @@ export default function StockIntakeModal({
           : 0;
     const priceVal = String(Number(rawPrice) || 0);
     setSellingPrice(priceVal);
+
+    // P1 #6 — receiving/restocking: when this catalog item ALREADY exists in
+    // the pharmacy's ledger, keep the medicine's current selling price (the
+    // pharmacist only decides batch-level data: quantity, batch no., expiry,
+    // purchase cost). The catalog retail price must NOT overwrite it.
+    const existing = findExistingMedicine(item, code);
+    if (existing && Number(existing.price) > 0) {
+      setSellingPrice(String(existing.price));
+      setIsRestockOfExisting(true);
+    } else {
+      setIsRestockOfExisting(false);
+    }
     // Purchase cost is intentionally left BLANK: the catalog has no
     // acquisition-cost field, so a retail-price "default" would fabricate
     // cost data (batch-cost-profit fix). The pharmacist enters the real
     // purchase cost; blank flows through as an honest unknown-cost batch.
 
-    // Default expiry & batch
-    setExpiryDate(prev => prev || getDefaultExpiryDate());
+    // Default expiry & batch — expiry stays empty (Unknown), batch auto-code
+    // stays as a convenience that the pharmacist can overwrite.
     setBatchNumber(prev => prev || generateDefaultBatch());
     setQuantity(prev => (prev > 0 ? prev : 1));
   }, []);
@@ -322,7 +362,10 @@ export default function StockIntakeModal({
 
   // Validation
   const quantityValid = quantity > 0 && !isNaN(quantity);
-  const expiryValid = Boolean(expiryDate && !isNaN(new Date(expiryDate).getTime()));
+  // P1 #5: empty expiry = honest Unknown; only a malformed non-empty date is
+  // invalid. FEFO treats unknown-expiry batches as last-resort stock.
+  const expiryUnknown = !expiryDate || expiryDate.trim() === '';
+  const expiryValid = expiryUnknown || !isNaN(new Date(expiryDate).getTime());
   const priceNum = parseFloat(sellingPrice);
   const priceValid = !isNaN(priceNum) && priceNum >= 0;
   
@@ -383,7 +426,7 @@ export default function StockIntakeModal({
         category: category.trim() || 'General',
         stock: Number(quantity),
         minThreshold: 5,
-        expiryDate: new Date(expiryDate).toISOString(),
+        expiryDate: expiryUnknown ? '' : new Date(expiryDate).toISOString(),
         price: priceNum,
         costPrice: Number(costPrice) || undefined,
         dosageForm: dosageForm.trim() || 'Tablets',
@@ -397,7 +440,7 @@ export default function StockIntakeModal({
           id: `hist-${Date.now()}`,
           timestamp: new Date().toISOString(),
           type: "stock_in",
-          note: `Ledger intake: ${quantity} units (Batch: ${batchCode}, Expiry: ${expiryDate}, Mode: ${isManualMode ? 'Manual' : 'Catalog'})`,
+          note: `Ledger intake: ${quantity} units (Batch: ${batchCode}, Expiry: ${expiryUnknown ? 'Unknown' : expiryDate}, Mode: ${isManualMode ? 'Manual' : 'Catalog'})`,
           delta: Number(quantity),
           stockAfter: Number(quantity)
         }]
@@ -410,7 +453,7 @@ export default function StockIntakeModal({
       setSuccessData({
         name: finalName,
         quantity: Number(quantity),
-        expiry: expiryDate
+        expiry: expiryUnknown ? (lang === 'ar' ? 'غير معروف' : 'Unknown') : expiryDate
       });
 
       triggerToast(
@@ -857,13 +900,15 @@ export default function StockIntakeModal({
                     </div>
                   </div>
 
-                  {/* Expiration Date */}
+                  {/* Expiration Date — optional; Unknown stays Unknown (P1 #5) */}
                   <div>
                     <label className="block text-xs font-bold text-slate-800 mb-1 flex items-center justify-between">
-                      <span>{lang === 'ar' ? 'تاريخ الصلاحية *' : 'Expiration Date *'}</span>
-                      {!expiryValid && (
+                      <span>{lang === 'ar' ? 'تاريخ الصلاحية (اختياري)' : 'Expiration Date'}</span>
+                      {!expiryValid ? (
                         <span className="text-rose-500 text-[10px] font-semibold">{lang === 'ar' ? 'تاريخ غير صالح' : 'Invalid date'}</span>
-                      )}
+                      ) : expiryUnknown ? (
+                        <span className="text-amber-600 text-[10px] font-semibold">{lang === 'ar' ? 'غير معروف' : 'Unknown'}</span>
+                      ) : null}
                     </label>
                     <div className="relative">
                       <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
@@ -872,7 +917,6 @@ export default function StockIntakeModal({
                         id="input-intake-expiry"
                         value={expiryDate}
                         onChange={(e) => setExpiryDate(e.target.value)}
-                        required
                         className={`w-full pl-9 pr-3 py-2 bg-white border rounded-xl font-semibold text-slate-900 text-sm focus:outline-none focus:ring-2 transition-all ${
                           !expiryValid 
                             ? 'border-rose-300 ring-rose-400 focus:ring-rose-400' 
@@ -880,6 +924,9 @@ export default function StockIntakeModal({
                         }`}
                       />
                     </div>
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      {lang === 'ar' ? 'اتركه فارغاً إذا كان غير معروف — لا يتم اختراع تاريخ.' : 'Leave empty if unknown — no date will be invented.'}
+                    </p>
                   </div>
                 </div>
 
@@ -928,6 +975,13 @@ export default function StockIntakeModal({
                         }`}
                       />
                     </div>
+                    {isRestockOfExisting && (
+                      <p className="text-[10px] text-brand-600 mt-1 font-semibold">
+                        {lang === 'ar'
+                          ? 'دواء موجود — تم الاحتفاظ بسعره الحالي. عدّله فقط إذا تغيّر.'
+                          : 'Existing medicine — current price kept. Change only if it changed.'}
+                      </p>
+                    )}
                   </div>
 
                   {/* Batch Number */}

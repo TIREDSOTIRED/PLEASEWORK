@@ -82,13 +82,20 @@ describe('planBatchMetadataUpdate', () => {
     expect(planBatchMetadataUpdate({ batchNumber: 'OLD' }, { batchNumber: '' }).errors[0].field).toBe('batchNumber');
   });
 
-  it('converts expiry to ISO and rejects invalid/blank dates', () => {
+  it('converts expiry to ISO, rejects invalid dates, and allows clearing to Unknown (P1 #5)', () => {
     const r = planBatchMetadataUpdate({ expiryDate: '2026-01-01T00:00:00.000Z' }, { expiryDate: '2027-06-15' });
     expect(r.errors).toEqual([]);
     expect(r.plan.writes.expiryDate).toBe(new Date('2027-06-15').toISOString());
 
     expect(planBatchMetadataUpdate({ expiryDate: 'x' }, { expiryDate: 'not-a-date' }).errors[0].field).toBe('expiryDate');
-    expect(planBatchMetadataUpdate({ expiryDate: 'x' }, { expiryDate: '' }).errors[0].field).toBe('expiryDate');
+    // Blank = explicit clear → expiry honestly becomes Unknown
+    const cleared = planBatchMetadataUpdate({ expiryDate: '2026-01-01T00:00:00.000Z' }, { expiryDate: '' });
+    expect(cleared.errors).toEqual([]);
+    expect(cleared.plan.writes.expiryDate).toBe('');
+    expect(cleared.plan.changes[0].to).toBe('Unknown');
+    // Clearing when already unknown is a no-op
+    const noop = planBatchMetadataUpdate({ expiryDate: '' }, { expiryDate: '' });
+    expect(noop.plan.writes.expiryDate).toBeUndefined();
   });
 
   it('never writes stock — even if a caller smuggles it in', () => {

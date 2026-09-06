@@ -40,9 +40,11 @@ export default function MedicineRow({
   const isOut = stock <= 0;
   const isLow = !isOut && stock < medicine.minThreshold;
 
-  const daysToExpiry = getDaysToExpiry(medicine.expiryDate);
-  const isExpired = daysToExpiry <= 0;
-  const isExpiringSoon = !isExpired && daysToExpiry < 90;
+  // P1 #5: unknown expiry is shown honestly, never computed as a fake date.
+  const expiryUnknown = !medicine.expiryDate;
+  const daysToExpiry = expiryUnknown ? NaN : getDaysToExpiry(medicine.expiryDate);
+  const isExpired = !expiryUnknown && daysToExpiry <= 0;
+  const isExpiringSoon = !expiryUnknown && !isExpired && daysToExpiry < 90;
 
   const adjust = (delta: 1 | -1) => {
     if (delta === -1 && isOut) return;
@@ -95,7 +97,9 @@ export default function MedicineRow({
       ) : (
         <Calendar className="w-3 h-3 shrink-0" aria-hidden="true" />
       )}
-      {String(medicine.expiryDate).split('T')[0]}
+      {expiryUnknown
+        ? (lang === 'ar' ? 'غير معروف' : 'Unknown')
+        : String(medicine.expiryDate).split('T')[0]}
     </span>
   );
 

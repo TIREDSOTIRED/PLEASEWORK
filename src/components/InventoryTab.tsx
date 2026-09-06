@@ -651,12 +651,13 @@ export default function InventoryTab({
  )}
  </AnimatePresence>
 
- <StockIntakeModal
+               <StockIntakeModal
  isOpen={isStockIntakeOpen}
  onClose={() => setIsStockIntakeOpen(false)}
  lang={lang}
  onAddMedicine={onAddMedicine || (async () => {})}
  triggerToast={triggerToast}
+ existingMedicines={medicines}
  />
 
  {/* Surplus Exchange — publish private stock to the marketplace */}

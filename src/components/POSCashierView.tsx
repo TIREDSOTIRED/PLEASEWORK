@@ -1,11 +1,13 @@
 import CentralScannerModal from './scanner/CentralScannerModal';
 import InlineCameraScanner from './scanner/InlineCameraScanner';
+import FirstRunChecklist from './FirstRunChecklist';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Modal } from './ui/Modal';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
  ShoppingCart, Plus, Minus, Trash2, Search, CheckCircle2, Package, Receipt, Zap, PauseCircle,
- Filter, Sparkles, AlertCircle, ChevronDown, RefreshCw, Barcode, Camera, Check, ArrowRight, X, Loader2, ArrowRightLeft
+ Filter, Sparkles, AlertCircle, ChevronDown, RefreshCw, Barcode, Camera, Check, ArrowRight, X, Loader2, ArrowRightLeft,
+ Banknote, CreditCard
 } from 'lucide-react';
 import { Medicine } from '../types';
 import { translations } from '../data/translations';
@@ -36,12 +38,16 @@ import StockIntakeModal from './warehouse/StockIntakeModal';
 interface POSCashierViewProps {
  lang?: 'en' | 'ar';
  medicines: Medicine[];
- onCompleteSale: (cartItems: any[], paymentMethod?: string, checkoutSessionId?: string) => Promise<{ success: boolean; error?: string }>;
+ onCompleteSale: (cartItems: any[], paymentMethod?: string, checkoutSessionId?: string, customerName?: string) => Promise<{ success: boolean; error?: string }>;
  triggerToast?: (message: string, type: 'success' | 'info' | 'error') => void;
  externalScannedCode?: { code: string; timestamp: number } | null;
  onOpenScanner?: () => void;
  onAddToB2BOrder?: (item: any, quantity?: number) => void;
  onAddMedicine?: (m: Medicine) => Promise<void>;
+ /** Authoritative tenant display name for tenant-branded receipts (P2 #9). */
+ pharmacyName?: string;
+ /** Any sale has ever been recorded — drives the first-run checklist (P1 #7). */
+ hasCompletedSale?: boolean;
 }
 
 interface CartItem {
@@ -69,7 +75,9 @@ export default function POSCashierView({
  externalScannedCode,
  onOpenScanner,
  onAddToB2BOrder,
- onAddMedicine
+ onAddMedicine,
+ pharmacyName,
+ hasCompletedSale
 }: POSCashierViewProps) {
  const ui = useUI();
  const lang = propLang || ui.lang || 'ar';
@@ -106,7 +114,10 @@ export default function POSCashierView({
  const [selectedCategory, setSelectedCategory] = useState('all');
  const [displayLimit, setDisplayLimit] = useState(40);
  const [showSuccessOverlay, setShowSuccessOverlay] = useState(false);
- const [lastSaleData, setLastSaleData] = useState<{items: any[], total: number, time: string, invoiceId: string, paymentMethod?: string} | null>(null);
+ const [lastSaleData, setLastSaleData] = useState<{items: any[], total: number, time: string, invoiceId: string, paymentMethod?: string, customerName?: string} | null>(null);
+ // P1 #3 — retail credit/owed: a normal POS choice, not an accounting screen.
+ const [paymentMode, setPaymentMode] = useState<'cash' | 'credit'>('cash');
+ const [creditCustomer, setCreditCustomer] = useState('');
  const [scannerReady, setScannerReady] = useState(true);
  const [isCameraScannerOpen, setIsCameraScannerOpen] = useState(false);
  const [isInlineScannerOpen, setIsInlineScannerOpen] = useState(false);
@@ -165,16 +176,42 @@ export default function POSCashierView({
  setIsSearching(true);
  try {
  let results = medicines;
- const query = debouncedSearchQuery.toLowerCase().trim();
+  const query = debouncedSearchQuery.toLowerCase().trim();
 
- if (query) {
- results = results.filter(med => 
- (med.name && med.name.toLowerCase().includes(query)) ||
- (med.genericName && med.genericName.toLowerCase().includes(query)) ||
- (med.barcode && String(med.barcode).toLowerCase().includes(query)) ||
- (med.batchNumber && String(med.batchNumber).toLowerCase().includes(query))
- );
- }
+  if (query) {
+  results = results.filter(med => 
+  (med.name && med.name.toLowerCase().includes(query)) ||
+  (med.genericName && med.genericName.toLowerCase().includes(query)) ||
+  (med.barcode && String(med.barcode).toLowerCase().includes(query)) ||
+  (med.batchNumber && String(med.batchNumber).toLowerCase().includes(query))
+  );
+
+  // P2 #10: English brand-name search against Arabic-named inventory.
+  // The catalog is the bilingual bridge: resolve the query to catalog
+  // entries, then match LOCAL stock by barcode or catalogId. Exact
+  // identity keys only — no fuzzy merging of distinct medicines.
+  if (results.length === 0 && searchCatalogRemote) {
+  searchCatalogRemote(query, 8)
+  .then(catalogHits => {
+  if (!isMounted) return;
+  const hitKeys = new Set<string>();
+  (catalogHits || []).forEach((c: any) => {
+  const cid = String(c?.id || c?.catalogId || '').replace(/\//g, '_');
+  if (cid) hitKeys.add(cid);
+  const bc = String(c?.barcode || '').trim();
+  if (bc) hitKeys.add(bc);
+  });
+  if (hitKeys.size > 0) {
+  const bridged = medicines.filter(m =>
+  hitKeys.has(String(m.catalogId || '')) ||
+  hitKeys.has(String(m.barcode || '').trim())
+  );
+  if (bridged.length > 0) setFilteredMedicines(bridged);
+  }
+  })
+  .catch(() => {});
+  }
+  }
 
  if (selectedCategory !== 'all') {
  const catLower = selectedCategory.toLowerCase();
@@ -412,57 +449,70 @@ export default function POSCashierView({
  }
  }, [externalScannedCode, handleScan]);
 
- // Complete checkout sale
- const checkout = useCallback(async (paymentMethod = 'Cash') => {
- if (stateRef.current.isProcessing) return;
- const currentCart = stateRef.current.cart;
- if (currentCart.length === 0) return;
- 
- stateRef.current.isProcessing = true;
- setIsProcessing(true);
- 
- try {
- const checkoutSessionId = `SALE-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  // Complete checkout sale — paymentMethod 'Cash' | 'Credit' (P1 #3).
+  // Credit sales record the customer name on the receivable (ledger row
+  // status 'Pending'); settlement happens later from the Financial Ledger.
+  const checkout = useCallback(async (paymentMethod = 'Cash', customerName?: string) => {
+  if (stateRef.current.isProcessing) return;
+  const currentCart = stateRef.current.cart;
+  if (currentCart.length === 0) return;
 
- const cartPayload = currentCart.map(item => ({
- medId: item.med.id,
- name: item.med.name,
- quantitySold: item.quantity,
- priceAtSale: item.med.price
- // NOTE: real unit cost is resolved from dispensed batch records during
- // checkout (utils/cost.ts) — never estimated here.
- }));
- 
- const invoiceId = `INV-${Math.floor(10000 + Math.random() * 90000)}`;
- const total = currentCart.reduce((sum, item) => sum + (item.quantity * item.med.price), 0);
- 
- const result = await onCompleteSale(cartPayload, paymentMethod, checkoutSessionId);
- if (result.success) {
- hardware.playCheckoutSuccess();
- 
- setLastSaleData({
- items: currentCart,
- total,
- time: new Date().toLocaleString(),
- invoiceId,
- paymentMethod
- });
- 
- setCart([]);
- setShowSuccessOverlay(true);
- if (searchInputRef.current) {
- searchInputRef.current.focus();
- }
- } else {
- triggerToast(result.error || 'Failed to complete sale', 'error');
- }
- } catch (err: any) {
- triggerToast(err.message || 'System error during checkout', 'error');
- } finally {
- stateRef.current.isProcessing = false;
- setIsProcessing(false);
- }
- }, [onCompleteSale, triggerToast, hardware]);
+  if (paymentMethod === 'Credit' && !(customerName || '').trim()) {
+  triggerToast(
+  lang === 'ar' ? 'أدخل اسم العميل لتسجيل الدين.' : 'Enter the customer name to record the debt.',
+  'warning'
+  );
+  return;
+  }
+
+  stateRef.current.isProcessing = true;
+  setIsProcessing(true);
+  
+  try {
+  const checkoutSessionId = `SALE-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+  const cartPayload = currentCart.map(item => ({
+  medId: item.med.id,
+  name: item.med.name,
+  quantitySold: item.quantity,
+  priceAtSale: item.med.price
+  // NOTE: real unit cost is resolved from dispensed batch records during
+  // checkout (utils/cost.ts) — never estimated here.
+  }));
+  
+  const invoiceId = `INV-${Math.floor(10000 + Math.random() * 90000)}`;
+  const total = currentCart.reduce((sum, item) => sum + (item.quantity * item.med.price), 0);
+  
+  const result = await onCompleteSale(cartPayload, paymentMethod, checkoutSessionId, customerName?.trim() || undefined);
+  if (result.success) {
+  hardware.playCheckoutSuccess();
+  
+  setLastSaleData({
+  items: currentCart,
+  total,
+  time: new Date().toLocaleString(),
+  invoiceId,
+  paymentMethod,
+  customerName: paymentMethod === 'Credit' ? (customerName || '').trim() : undefined
+  });
+  
+  setCart([]);
+  setShowSuccessOverlay(true);
+  setPaymentMode('cash');
+  setCreditCustomer('');
+  if (searchInputRef.current) {
+  searchInputRef.current.focus();
+  }
+  } else {
+  triggerToast(result.error || 'Failed to complete sale', 'error');
+  }
+  } catch (err: any) {
+  triggerToast(err.message || 'System error during checkout', 'error');
+  } finally {
+  stateRef.current.isProcessing = false;
+  setIsProcessing(false);
+  }
+  }, [onCompleteSale, triggerToast, hardware, lang]);
 
  // Hardware Scanner keyboard shortcuts
  useEffect(() => {
@@ -595,6 +645,14 @@ export default function POSCashierView({
 
  return (
  <div className="flex-1 w-full h-full flex flex-col bg-slate-50 text-slate-900 font-sans relative">
+
+ {/* P1 #7 — first-run guidance: dismissible, non-blocking */}
+ <FirstRunChecklist
+ lang={lang}
+ pharmacyName={pharmacyName}
+ hasMedicines={medicines.length > 0}
+ hasSales={hasCompletedSale}
+ />
  
  {/* Offline sync status banners */}
  <div className="absolute top-2 left-1/2 -translate-x-1/2 z-40 flex flex-col gap-2">
@@ -633,15 +691,22 @@ export default function POSCashierView({
  className="bg-white rounded-xl shadow-lg w-full max-w-md overflow-hidden flex flex-col max-h-[90vh]"
  >
  <div id="printable-receipt" className="p-6 bg-white flex-1 overflow-y-auto">
- <div className="text-center border-b border-dashed border-slate-300 pb-4 mb-4">
- <h2 className="text-xl font-black text-slate-900 mb-1">E Eshmun Pharmacy</h2>
- <p className="text-sm font-bold text-slate-500 uppercase tracking-widest">{lang === 'ar' ? 'إيصال رسمي' : 'Official Receipt'}</p>
- <p className="text-xs text-slate-400 mt-2 font-mono">{lastSaleData.time}</p>
- <p className="text-xs text-slate-400 font-mono mt-1">Receipt #{lastSaleData.invoiceId}</p>
- {lastSaleData.paymentMethod === 'Credit' && (
- <p className="text-xs font-bold text-brand-600 bg-blue-50 py-1 px-2 rounded mt-2 uppercase">Deferred / Credit</p>
- )}
- </div>
+  <div className="text-center border-b border-dashed border-slate-300 pb-4 mb-4">
+  <h2 className="text-xl font-black text-slate-900 mb-1">{pharmacyName || 'Eshmun Pharmacy'}</h2>
+  <p className="text-sm font-bold text-slate-500 uppercase tracking-widest">{lang === 'ar' ? 'إيصال رسمي' : 'Official Receipt'}</p>
+  <p className="text-xs text-slate-400 mt-2 font-mono">{lastSaleData.time}</p>
+  <p className="text-xs text-slate-400 font-mono mt-1">Receipt #{lastSaleData.invoiceId}</p>
+  {lastSaleData.paymentMethod === 'Credit' && (
+  <div className="mt-2 space-y-1">
+  <p className="text-xs font-bold text-brand-600 bg-blue-50 py-1 px-2 rounded uppercase">Deferred / Credit</p>
+  {lastSaleData.customerName && (
+  <p className="text-xs font-bold text-amber-700 bg-amber-50 py-1 px-2 rounded">
+  {lang === 'ar' ? 'على حساب' : 'Owed by'}: {lastSaleData.customerName}
+  </p>
+  )}
+  </div>
+  )}
+  </div>
  
  <div className="space-y-3 mb-6">
  {lastSaleData.items.map((item, idx) => (
@@ -1039,15 +1104,81 @@ export default function POSCashierView({
                     </div>
                   </div>
 
-                  {/* Complete Sale Button */}
-                  <button
-                    onClick={() => checkout("Cash")}
-                    disabled={cart.length === 0 || isProcessing}
-                    className="w-full mt-1 py-3.5 sm:py-4 rounded-xl font-bold text-base sm:text-lg flex items-center justify-center gap-2 sm:gap-3 transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-brand-600 hover:bg-brand-700 text-white shadow-lg shadow-brand-700/20 active:scale-[0.98] cursor-pointer"
-                  >
-                    {isProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Receipt className="w-5 h-5" />}
-                    <span>{lang === "ar" ? "إتمام البيع (الدفع نقداً) [Enter]" : "Complete Sale (Cash) [Enter]"}</span>
-                  </button>
+                  {/* Payment + Complete Sale (P1 #3): Cash | Credit/Owed */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      id="pos-payment-cash"
+                      onClick={() => setPaymentMode('cash')}
+                      disabled={cart.length === 0 || isProcessing}
+                      className={`py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer border-2 ${
+                        paymentMode === 'cash'
+                          ? 'bg-brand-600 border-brand-700 text-white shadow-md shadow-brand-600/20'
+                          : 'bg-white border-slate-200 text-slate-600 hover:border-brand-300'
+                      }`}
+                    >
+                      <Banknote className="w-4 h-4" />
+                      <span>{lang === "ar" ? "نقداً" : "Cash"}</span>
+                    </button>
+                    <button
+                      id="pos-payment-credit"
+                      onClick={() => setPaymentMode('credit')}
+                      disabled={cart.length === 0 || isProcessing}
+                      className={`py-2.5 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50 cursor-pointer border-2 ${
+                        paymentMode === 'credit'
+                          ? 'bg-amber-500 border-amber-600 text-white shadow-md shadow-amber-500/20'
+                          : 'bg-white border-slate-200 text-slate-600 hover:border-amber-300'
+                      }`}
+                    >
+                      <CreditCard className="w-4 h-4" />
+                      <span>{lang === "ar" ? "دين / آجل" : "Credit / Owed"}</span>
+                    </button>
+                  </div>
+
+                  {paymentMode === 'credit' && (
+                    <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="font-bold text-amber-800 uppercase tracking-wider">
+                          {lang === "ar" ? "اسم العميل" : "Customer"}
+                        </span>
+                        <span className="font-black text-amber-800 font-mono">
+                          {lang === "ar" ? "المبلغ المستحق" : "Amount owed"}: {totalDue.toLocaleString()} SYP
+                        </span>
+                      </div>
+                      <input
+                        id="pos-credit-customer"
+                        type="text"
+                        value={creditCustomer}
+                        onChange={(e) => setCreditCustomer(e.target.value)}
+                        placeholder={lang === "ar" ? "مثال: صيدلية الدكتور عمر" : "e.g. Dr. Omar"}
+                        className="w-full px-3 py-2.5 bg-white border border-amber-200 rounded-xl text-sm font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-400 transition-all"
+                      />
+                      <button
+                        id="btn-complete-credit-sale"
+                        onClick={() => checkout("Credit", creditCustomer)}
+                        disabled={cart.length === 0 || isProcessing || !creditCustomer.trim()}
+                        className="w-full py-3 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-amber-500 hover:bg-amber-600 text-white shadow-md shadow-amber-500/20 active:scale-[0.98] cursor-pointer"
+                      >
+                        {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Receipt className="w-4 h-4" />}
+                        <span>
+                          {lang === "ar"
+                            ? `إتمام البيع آجل — ${totalDue.toLocaleString()} ل.س على العميل`
+                            : `Complete Sale (Credit) — ${totalDue.toLocaleString()} SYP owed`}
+                        </span>
+                      </button>
+                    </div>
+                  )}
+
+                  {paymentMode === 'cash' && (
+                    <button
+                      id="btn-complete-cash-sale"
+                      onClick={() => checkout("Cash")}
+                      disabled={cart.length === 0 || isProcessing}
+                      className="w-full py-3.5 sm:py-4 rounded-xl font-bold text-base sm:text-lg flex items-center justify-center gap-2 sm:gap-3 transition-all disabled:opacity-50 disabled:cursor-not-allowed bg-brand-600 hover:bg-brand-700 text-white shadow-lg shadow-brand-700/20 active:scale-[0.98] cursor-pointer"
+                    >
+                      {isProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Receipt className="w-5 h-5" />}
+                      <span>{lang === "ar" ? "إتمام البيع (الدفع نقداً) [Enter]" : "Complete Sale (Cash) [Enter]"}</span>
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -1098,15 +1229,16 @@ export default function POSCashierView({
  }}
  />
  
- {onAddMedicine && (
- <StockIntakeModal
- isOpen={isStockIntakeOpen}
- onClose={() => setIsStockIntakeOpen(false)}
- lang={lang}
- onAddMedicine={onAddMedicine}
- triggerToast={triggerToast}
- />
- )}
+  {onAddMedicine && (
+  <StockIntakeModal
+  isOpen={isStockIntakeOpen}
+  onClose={() => setIsStockIntakeOpen(false)}
+  lang={lang}
+  onAddMedicine={onAddMedicine}
+  triggerToast={triggerToast}
+  existingMedicines={medicines}
+  />
+  )}
  </div>
  );
 }

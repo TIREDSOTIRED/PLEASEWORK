@@ -1018,7 +1018,7 @@ export default function InventoryTab({
  </Modal>
 
  {/* Medicine Intake Modal for Warehouse Onboarding and Barcode Intake */}
- <StockIntakeModal
+  <StockIntakeModal
  isOpen={isStockIntakeOpen}
  onClose={() => {
  setIsStockIntakeOpen(false);
@@ -1027,6 +1027,7 @@ export default function InventoryTab({
  lang={lang}
  onAddMedicine={onAddMedicine || (async () => {})}
  triggerToast={triggerToast}
+ existingMedicines={medicines}
  initialItem={intakeRequest}
  />
 

@@ -217,6 +217,51 @@ export default function WarehouseOffersTab({ medicines = [], lang = 'en', trigge
     return () => unsubscribe();
   }, [currentSession?.pharmacyId]);
 
+  // ---------------------------------------------------------------------------
+  // Legacy offer self-repair (P0 seller routing backfill, deterministic only).
+  // Offers written before sellerTenantId existed are invisible to the query
+  // above AND unorderable in the marketplace. When THIS warehouse's current
+  // name EXACTLY matches an unclaimed offer's sellerName, re-attach it to this
+  // tenant (single guarded pass per session; never touches offers that belong
+  // to another resolvable tenant). Renamed/ambiguous legacy offers stay
+  // unavailable by design — they cannot be repaired without guessing.
+  // ---------------------------------------------------------------------------
+  const legacyRepairDoneRef = React.useRef(false);
+  useEffect(() => {
+    const repair = async () => {
+      if (!db || !currentSession?.pharmacyId || legacyRepairDoneRef.current) return;
+      const myName = (activePharmacyRef.current?.name || activePharmacyRef.current?.displayName || '').trim();
+      if (!myName) return;
+      legacyRepairDoneRef.current = true;
+      try {
+        const { getDocs: gd } = await import('firebase/firestore');
+        const snap = await gd(query(
+          collection(db, 'wholesale_offers'),
+          where('sellerName', '==', myName)
+        ));
+        let repaired = 0;
+        for (const d of snap.docs) {
+          const data = d.data() as any;
+          const id = String(data.sellerTenantId || '').trim();
+          if (id && id !== currentSession.pharmacyId) continue; // owned by someone else — never touch
+          if (id === currentSession.pharmacyId) continue;       // already correct
+          await updateDoc(d.ref, {
+            sellerTenantId: currentSession.pharmacyId,
+            sellerName: myName,
+            updatedAt: new Date().toISOString()
+          });
+          repaired += 1;
+        }
+        if (repaired > 0 && triggerToast) {
+          triggerToast(lang === 'ar' ? `تم إصلاح ${repaired} عرض قديم لربطه بحسابك.` : `${repaired} legacy offer(s) re-linked to your warehouse.`, 'success');
+        }
+      } catch (e: any) {
+        console.warn('Legacy offer repair skipped:', e?.message || e);
+      }
+    };
+    repair();
+  }, [currentSession?.pharmacyId]);
+
   // Inventory source for publishing: warehouse inventory or catalog fallback
   const selectableInventory = useMemo(() => {
     // If warehouse has inventory items in state, use them; also allow searching full catalog
