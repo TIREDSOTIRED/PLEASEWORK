@@ -18,35 +18,51 @@ import { todayLocalKey, isSameLocalDay } from '../utils/dayKey';
 import { computeCustomerBalances, UNNAMED_CUSTOMER } from '../domain/finance/customerCredit';
 
 interface LedgerTabProps {
- salesLogs?: SaleRecord[];
- medicines?: Medicine[];
- lang?: 'en' | 'ar';
- triggerToast?: (msg: string, type: 'success' | 'info' | 'error') => void;
- /** P1 #4 — append-only customer settlement writer (RootNavigator). */
- onRecordPayment?: (customerName: string, amountPaid: number, note?: string) => Promise<boolean>;
+  salesLogs?: SaleRecord[];
+  medicines?: Medicine[];
+  lang?: 'en' | 'ar';
+  triggerToast?: (msg: string, type: 'success' | 'info' | 'error') => void;
+  /** P1 #4 — append-only customer settlement writer (RootNavigator). */
+  onRecordPayment?: (customerName: string, amountPaid: number, note?: string) => Promise<boolean>;
+  /** P2 #13 — refund/return writer (RootNavigator): validates via buildRefund,
+   *  writes the REFUND ledger row + compensating stock in one atomic batch. */
+  onProcessRefund?: (sale: SaleRecord, returnQtys: Record<string, number>, reason?: string) => Promise<boolean>;
 }
 
-export default function LedgerTab({ salesLogs = [], medicines = [], lang = 'en', triggerToast, onRecordPayment }: LedgerTabProps) {
- const [filter, setFilter] = useState<'all' | 'Paid' | 'Pending' | 'Refunded'>('all');
- const [searchQuery, setSearchQuery] = useState('');
- const [paymentCustomer, setPaymentCustomer] = useState<string | null>(null);
- const [paymentAmount, setPaymentAmount] = useState('');
- const [paymentBusy, setPaymentBusy] = useState(false);
+export default function LedgerTab({ salesLogs = [], medicines = [], lang = 'en', triggerToast, onRecordPayment, onProcessRefund }: LedgerTabProps) {
+  const [filter, setFilter] = useState<'all' | 'Paid' | 'Pending' | 'Refunded'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [paymentCustomer, setPaymentCustomer] = useState<string | null>(null);
+  const [paymentAmount, setPaymentAmount] = useState('');
+  const [paymentBusy, setPaymentBusy] = useState(false);
+  // P2 #13 — refund modal state: the sale being returned, per-medId return
+  // quantities, and an optional reason for the audit trail.
+  const [refundSale, setRefundSale] = useState<SaleRecord | null>(null);
+  const [refundQtys, setRefundQtys] = useState<Record<string, number>>({});
+  const [refundReason, setRefundReason] = useState('');
+  const [refundBusy, setRefundBusy] = useState(false);
 
- // Combine real salesLogs if available. Settlements (append-only
- // CREDIT_SETTLEMENT rows) render as their own payment transactions.
- const realTransactions = (salesLogs || []).map((sale, idx) => {
- const isSettlement = (sale as any).type === 'CREDIT_SETTLEMENT';
- return {
- id: sale.saleId || `TX-${1000 + idx}`,
- customer: (sale as any).customerName || (isSettlement ? UNNAMED_CUSTOMER : (lang === 'ar' ? 'عميل مباشر' : 'Direct Customer')),
- date: sale.timestamp ? new Date(sale.timestamp).toLocaleString() : '2026-07-30',
- amount: isSettlement ? ((sale as any).amountPaid || 0) : (sale.totalRevenue || 0),
- status: (sale as any).status || 'Paid',
- type: isSettlement ? (lang === 'ar' ? 'دفعة عميل' : 'Customer Payment') : 'POS Sale',
- itemsCount: sale.items?.length || 1
- };
- });
+  // Combine real salesLogs if available. Settlements (append-only
+  // CREDIT_SETTLEMENT rows) render as their own payment transactions;
+  // refunds (append-only REFUND rows) render as negative reversals.
+  const realTransactions = (salesLogs || []).map((sale, idx) => {
+  const isSettlement = sale.type === 'CREDIT_SETTLEMENT';
+  const isRefund = sale.type === 'REFUND';
+  return {
+  id: sale.saleId || `TX-${1000 + idx}`,
+  customer: sale.customerName || (isSettlement ? UNNAMED_CUSTOMER : (lang === 'ar' ? 'عميل مباشر' : 'Direct Customer')),
+  date: sale.timestamp ? new Date(sale.timestamp).toLocaleString() : '2026-07-30',
+  amount: isSettlement ? (sale.amountPaid || 0) : (sale.totalRevenue || 0),
+  status: sale.status || 'Paid',
+  type: isRefund
+  ? (lang === 'ar' ? 'مرتجع عميل' : 'Customer Return')
+  : isSettlement
+  ? (lang === 'ar' ? 'دفعة عميل' : 'Customer Payment')
+  : 'POS Sale',
+  itemsCount: sale.items?.length || 1,
+  sale
+  };
+  });
 
  const transactions = realTransactions;
 
@@ -74,7 +90,11 @@ export default function LedgerTab({ salesLogs = [], medicines = [], lang = 'en',
  const todayProfit = todaysSales
  .reduce((sum, s) => sum + (Number(s.totalProfit) || 0), 0);
 
- const totalRefunds = 0; // No refund flow records status 'Refunded' yet — honest zero.
+  // P2 #13 — refunds now flow as append-only REFUND ledger rows (negative
+  // amounts). Sum their magnitude for the Refunds & Adjustments card.
+  const totalRefunds = (salesLogs || [])
+  .filter(s => s.type === 'REFUND')
+  .reduce((sum, s) => sum + Math.abs(Number(s.totalRevenue) || 0), 0);
 
  // P1 #4 — receivables with settlements applied. The Outstanding Debt card
  // shows what is STILL owed (billed credit sales minus recorded payments);
@@ -280,21 +300,22 @@ export default function LedgerTab({ salesLogs = [], medicines = [], lang = 'en',
 
  <div className="flex items-center gap-2 w-full sm:w-auto overflow-x-auto pb-1 sm:pb-0">
  <Filter className="w-4 h-4 text-slate-400 shrink-0" />
-  {/* Pending/Refunded hidden: SaleRecord has no status field yet — only completed POS sales exist */}
-  {(['all', 'Paid'] as const).map((status) => (
- <button
- key={status}
- onClick={() => setFilter(status)}
- className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors whitespace-nowrap cursor-pointer ${
- filter === status
- ? 'bg-brand-700 text-white shadow-xs'
- : 'bg-brand-50 text-slate-700 hover:bg-brand-100 border border-brand-100'
- }`}
- >
- {status === 'all' && (lang === 'ar' ? 'الكل' : 'All')}
- {status === 'Paid' && (lang === 'ar' ? 'مدفوع' : 'Paid')}
- </button>
- ))}
+  {/* P2 #13: Refunded filter is live — full/partial refunds flip or flag sale rows */}
+  {(['all', 'Paid', 'Refunded'] as const).map((status) => (
+  <button
+  key={status}
+  onClick={() => setFilter(status)}
+  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors whitespace-nowrap cursor-pointer ${
+  filter === status
+  ? 'bg-brand-700 text-white shadow-xs'
+  : 'bg-brand-50 text-slate-700 hover:bg-brand-100 border border-brand-100'
+  }`}
+  >
+  {status === 'all' && (lang === 'ar' ? 'الكل' : 'All')}
+  {status === 'Paid' && (lang === 'ar' ? 'مدفوع' : 'Paid')}
+  {status === 'Refunded' && (lang === 'ar' ? 'مرتجع' : 'Refunded')}
+  </button>
+  ))}
  </div>
  </div>
 
@@ -308,8 +329,9 @@ export default function LedgerTab({ salesLogs = [], medicines = [], lang = 'en',
  <th className="py-3 px-3">{lang === 'ar' ? 'التاريخ' : 'Date'}</th>
  <th className="py-3 px-3">{lang === 'ar' ? 'نوع العملية' : 'Type'}</th>
  <th className="py-3 px-3 text-right">{lang === 'ar' ? 'المبلغ' : 'Amount'}</th>
- <th className="py-3 px-3 text-center">{lang === 'ar' ? 'الحالة' : 'Status'}</th>
- </tr>
+  <th className="py-3 px-3 text-center">{lang === 'ar' ? 'الحالة' : 'Status'}</th>
+  <th className="py-3 px-3 text-center">{lang === 'ar' ? 'إجراء' : 'Action'}</th>
+  </tr>
  </thead>
  <tbody className="divide-y divide-brand-50 text-slate-800 font-medium">
  {filteredTransactions.map((tx) => (
@@ -334,26 +356,132 @@ export default function LedgerTab({ salesLogs = [], medicines = [], lang = 'en',
  {lang === 'ar' ? 'معلق' : 'Pending'}
  </span>
  )}
- {tx.status === 'Refunded' && (
- <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-full font-bold text-[10px]">
- <RotateCcw className="w-3 h-3 text-rose-600" />
- {lang === 'ar' ? 'مرتجع' : 'Refunded'}
- </span>
- )}
- </td>
- </tr>
- ))}
- {filteredTransactions.length === 0 && (
- <tr>
- <td colSpan={6} className="py-8 text-center text-slate-400 font-medium">
- {lang === 'ar' ? 'لا توجد حركات تسوية مطابقة للبحث' : 'No transaction records found.'}
- </td>
- </tr>
- )}
- </tbody>
- </table>
- </div>
- </div>
- </div>
- );
+  {tx.status === 'Refunded' && (
+  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-rose-50 text-rose-700 border border-rose-200 rounded-full font-bold text-[10px]">
+  <RotateCcw className="w-3 h-3 text-rose-600" />
+  {lang === 'ar' ? 'مرتجع' : 'Refunded'}
+  </span>
+  )}
+  </td>
+  <td className="py-3.5 px-3 text-center">
+  {/* P2 #13 — Return action on real POS sales that still have returnable units */}
+  {tx.type === 'POS Sale' && onProcessRefund && (() => {
+  const sale = tx.sale as SaleRecord;
+  const returnable = (sale.items || []).reduce(
+  (s, i) => s + Math.max(0, (Number(i.quantitySold) || 0) - (Number(sale.refundedQty?.[i.medId]) || 0)),
+  0
+  );
+  if (returnable <= 0) return null;
+  return (
+  <button
+  onClick={() => {
+  setRefundSale(sale);
+  setRefundQtys({});
+  setRefundReason('');
+  }}
+  className="inline-flex items-center gap-1 px-2.5 py-1 bg-rose-50 text-rose-700 border border-rose-200 rounded-lg font-bold text-[10px] hover:bg-rose-100 transition-colors cursor-pointer"
+  >
+  <RotateCcw className="w-3 h-3" />
+  {lang === 'ar' ? 'إرجاع' : 'Return'}
+  </button>
+  );
+  })()}
+  </td>
+  </tr>
+  ))}
+  {filteredTransactions.length === 0 && (
+  <tr>
+  <td colSpan={7} className="py-8 text-center text-slate-400 font-medium">
+  {lang === 'ar' ? 'لا توجد حركات تسوية مطابقة للبحث' : 'No transaction records found.'}
+  </td>
+  </tr>
+  )}
+  </tbody>
+  </table>
+  </div>
+  </div>
+
+  {/* P2 #13 — Refund modal: per-item return quantities + reason */}
+  {refundSale && onProcessRefund && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50" onClick={() => !refundBusy && setRefundSale(null)}>
+  <div className="bg-white rounded-xl shadow-xl border border-slate-200 w-full max-w-md" onClick={e => e.stopPropagation()}>
+  <div className="p-5 border-b border-slate-100">
+  <h3 className="font-black text-slate-900 flex items-center gap-2">
+  <RotateCcw className="w-4 h-4 text-rose-600" />
+  {lang === 'ar' ? 'تسجيل مرتجع' : 'Record Return'} — <span className="font-mono text-xs text-slate-500">{refundSale.saleId}</span>
+  </h3>
+  <p className="text-xs text-slate-500 mt-1">
+  {lang === 'ar' ? 'تُحدَّد قيمة الاسترداد من سعر البيع الأصلي.' : 'Refund amounts use the original sale prices.'}
+  </p>
+  </div>
+  <div className="p-5 space-y-3 max-h-72 overflow-y-auto">
+  {(refundSale.items || []).map(item => {
+  const sold = Number(item.quantitySold) || 0;
+  const already = Number(refundSale.refundedQty?.[item.medId]) || 0;
+  const remaining = Math.max(0, sold - already);
+  const qty = refundQtys[item.medId] || 0;
+  return (
+  <div key={item.medId} className={`flex items-center justify-between gap-3 p-2.5 rounded-lg border ${remaining === 0 ? 'bg-slate-50 border-slate-100 opacity-60' : 'border-slate-200'}`}>
+  <div className="min-w-0">
+  <p className="text-xs font-bold text-slate-900 truncate">{item.name}</p>
+  <p className="text-[10px] text-slate-500 font-mono">
+  {sold} {lang === 'ar' ? 'مبيع' : 'sold'} × {(Number(item.priceAtSale) || 0).toLocaleString()}
+  {already > 0 && ` · ${already} ${lang === 'ar' ? 'مرتجع سابقاً' : 'already returned'}`}
+  </p>
+  </div>
+  {remaining > 0 ? (
+  <input
+  type="number"
+  min={0}
+  max={remaining}
+  value={qty === 0 ? '' : qty}
+  onChange={e => {
+  const v = Math.max(0, Math.min(remaining, Math.floor(Number(e.target.value) || 0)));
+  setRefundQtys(prev => ({ ...prev, [item.medId]: v }));
+  }}
+  className="w-16 px-2 py-1.5 border border-slate-200 rounded-lg text-xs font-mono focus:outline-none focus:ring-2 focus:ring-rose-300"
+  dir="ltr"
+  />
+  ) : (
+  <span className="text-[10px] font-bold text-slate-400">{lang === 'ar' ? 'مكتمل' : 'Done'}</span>
+  )}
+  </div>
+  );
+  })}
+  <input
+  type="text"
+  value={refundReason}
+  onChange={e => setRefundReason(e.target.value)}
+  placeholder={lang === 'ar' ? 'السبب (اختياري) — تلف، خطأ صرف…' : 'Reason (optional) — damaged, wrong item…'}
+  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-rose-300"
+  />
+  <div className="flex justify-between text-xs font-black text-slate-900 border-t border-slate-100 pt-3">
+  <span>{lang === 'ar' ? 'إجمالي الاسترداد' : 'Refund total'}</span>
+  <span className="font-mono text-rose-700">
+  {(refundSale.items || []).reduce((s, i) => s + (Number(refundQtys[i.medId]) || 0) * (Number(i.priceAtSale) || 0), 0).toLocaleString()} {lang === 'ar' ? 'ل.س' : 'SYP'}
+  </span>
+  </div>
+  </div>
+  <div className="p-4 border-t border-slate-100 flex justify-end gap-2">
+  <button onClick={() => setRefundSale(null)} disabled={refundBusy} className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-50 rounded-lg border border-slate-200 cursor-pointer disabled:opacity-50">
+  {lang === 'ar' ? 'إلغاء' : 'Cancel'}
+  </button>
+  <button
+  onClick={async () => {
+  setRefundBusy(true);
+  const ok = await onProcessRefund(refundSale, refundQtys, refundReason);
+  setRefundBusy(false);
+  if (ok) setRefundSale(null);
+  }}
+  disabled={refundBusy || Object.values(refundQtys).every(v => !v)}
+  className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+  >
+  {refundBusy ? (lang === 'ar' ? 'جارٍ التسجيل…' : 'Recording…') : (lang === 'ar' ? 'تأكيد الإرجاع' : 'Confirm Return')}
+  </button>
+  </div>
+  </div>
+  </div>
+  )}
+  </div>
+  );
 }

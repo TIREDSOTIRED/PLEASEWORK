@@ -36,6 +36,7 @@ import { RegisterApplicationService } from '../../application/RegisterApplicatio
 import { FEFOStockAllocator } from '../../domain/services';
 import { StockEngine, AdjustmentPlan } from '../../domain/services/StockEngine';
 import { persistMirror } from '../../utils/localMirror';
+import { buildRefund, mergeRefundedQty } from '../../domain/finance/refunds';
  import { resolveUnitCost } from '../../utils/cost';
  import { deriveBatchCost } from '../../utils/cost';
 import { HardwareIntegrationService } from '../../infrastructure/hardware/HardwareIntegrationService';
@@ -731,7 +732,94 @@ export default function RootNavigator({
   }
   };
 
- if (isLoading) {
+  /**
+   * P2 #13 — refunds/returns. Append-only reversal mirroring the settlement
+   * design: a NEW ledger doc of type 'REFUND' (negative totalRevenue) plus a
+   * compensating stock return; the ORIGINAL sale only accumulates
+   * `refundedQty` / `refundTotal` and flips to 'Refunded' when every sold
+   * unit is back. Amounts come from priceAtSale (what the customer paid),
+   * never the item's current price. One atomic writeBatch — on any failure
+   * nothing is half-recorded.
+   */
+  const processRefund = async (sale: SaleRecord, returnQtys: Record<string, number>, reason?: string): Promise<boolean> => {
+  if (!currentSession?.pharmacyId || !db) return false;
+  const result = buildRefund(sale, returnQtys, reason);
+  if (!result.ok) {
+  const msg = result.error === 'OVER_RETURN'
+  ? (lang === 'ar' ? 'الكمية المرتجعة تتجاوز المبيعات.' : 'Return quantity exceeds what was sold.')
+  : (lang === 'ar' ? 'طلب الإرجاع غير صالح.' : 'Invalid return request.');
+  triggerToast(msg, 'error');
+  return false;
+  }
+  try {
+  const { writeBatch: wb, doc: d, increment: inc, arrayUnion: au } = await import('firebase/firestore');
+  const batch = wb(db);
+  const tenantPath = ['tenants', currentSession.pharmacyId];
+  const refundId = `RET-${Date.now()}-${Math.floor(Math.random() * 100000)}`;
+  const reversedCost = (sale.items || []).reduce((s, i) => {
+  const line = result.refundLines.find(l => l.medId === i.medId);
+  return s + (line ? (Number(i.costAtSale) || 0) * line.qty : 0);
+  }, 0);
+
+  batch.set(d(db, ...tenantPath, 'ledger', refundId), {
+  saleId: refundId,
+  timestamp: new Date().toISOString(),
+  type: 'REFUND' as const,
+  originalSaleId: sale.saleId,
+  customerName: sale.customerName || '',
+  items: result.refundLines.map(l => ({ medId: l.medId, name: l.name, quantitySold: -l.qty, priceAtSale: -(l.amount / l.qty) })),
+  // Negative revenue/profit rows net the daily totals truthfully.
+  totalRevenue: -result.refundTotal,
+  totalProfit: -(result.refundTotal - reversedCost),
+  status: 'Refunded' as const,
+  paymentMethod: sale.paymentMethod || 'Cash',
+  employeeId: currentSession.email || 'unknown',
+  ...(reason && reason.trim() ? { reason: reason.trim() } : {})
+  });
+
+  // Original sale: accumulate returned quantities/amounts; flip status only
+  // on a FULL refund so partial credit-sales stay in receivables.
+  batch.update(d(db, ...tenantPath, 'ledger', sale.saleId), {
+  refundedQty: mergeRefundedQty(sale, result.refundLines),
+  refundTotal: inc(result.refundTotal),
+  ...(result.fullyRefunded ? { status: 'Refunded' as const } : {})
+  });
+
+  // Compensating stock return — units rejoin the aggregate pool (batch
+  // identity lives in the history note, not a separate ledger).
+  for (const line of result.refundLines) {
+  batch.update(d(db, ...tenantPath, 'storage_inventory', line.medId), {
+  stock: inc(line.qty),
+  lastUpdated: new Date().toISOString(),
+  history: au({
+  id: `hist-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+  timestamp: new Date().toISOString(),
+  type: 'stock_returned',
+  note: `Customer return against invoice ${sale.saleId}${reason && reason.trim() ? ` — ${reason.trim()}` : ''} (refund ${refundId})`,
+  quantityChange: line.qty
+  })
+  });
+  }
+
+  await batch.commit();
+  triggerToast(
+  lang === 'ar'
+  ? `تم تسجيل مرتجع بقيمة ${result.refundTotal.toLocaleString()} ل.س.`
+  : `Refund of ${result.refundTotal.toLocaleString()} SYP recorded.`,
+  'success'
+  );
+  return true;
+  } catch (err: any) {
+  console.warn('Refund failed:', err);
+  triggerToast(
+  lang === 'ar' ? 'فشل تسجيل المرتجع.' : 'Failed to record the refund.',
+  'error'
+  );
+  return false;
+  }
+  };
+
+  if (isLoading) {
  return (
  <div className="min-h-screen bg-slate-100 dark:bg-[#0f172a] flex flex-col items-center justify-center p-4">
  <div className="bg-white dark:bg-[#1e293b] border border-slate-200 dark:border-slate-700 rounded-xl shadow-md px-8 py-6 flex flex-col items-center gap-3 max-w-xs w-full">
@@ -948,6 +1036,7 @@ export default function RootNavigator({
   lang={lang}
   triggerToast={triggerToast}
   onRecordPayment={recordCustomerPayment}
+  onProcessRefund={processRefund}
   />
   ) : (
   activePharmacy?.tenantType === "WHOLESALE_WAREHOUSE" ? (

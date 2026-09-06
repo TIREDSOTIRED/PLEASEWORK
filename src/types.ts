@@ -56,12 +56,24 @@ export interface SaleItem {
 }
 
 export interface SaleRecord {
- saleId: string;
- timestamp: string; // ISO format
- items: SaleItem[];
- totalRevenue: number;
- totalProfit: number;
- status?: 'Paid' | 'Pending'; // Pending = دين (deferred payment, feeds ذمم مستحقة)
+  saleId: string;
+  timestamp: string; // ISO format
+  items: SaleItem[];
+  totalRevenue: number;
+  totalProfit: number;
+  status?: 'Paid' | 'Pending' | 'Refunded'; // Pending = دين (deferred payment, feeds ذمم مستحقة)
+  // Ledger row type: POS sales are untyped; append-only rows declare
+  // 'CREDIT_SETTLEMENT' (customer payment) or 'REFUND' (return reversal).
+  type?: 'CREDIT_SETTLEMENT' | 'REFUND';
+  customerName?: string;
+  paymentMethod?: string;
+  employeeId?: string;
+  note?: string;
+  amountPaid?: number; // settlements only
+  reason?: string; // refunds only
+  originalSaleId?: string; // refunds only
+  refundTotal?: number; // refunds accumulated on the ORIGINAL sale (P2 #13)
+  refundedQty?: Record<string, number>; // medId -> units returned (original sale only)
 }
 
 export function normalizeMedicine(med: any): Medicine {

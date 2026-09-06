@@ -21,6 +21,8 @@ export interface LedgerSaleLike {
   totalRevenue?: number;
   customerName?: string;
   timestamp?: string;
+  /** P2 #13 — refund money already returned against this sale. */
+  refundTotal?: number;
 }
 
 export interface SettlementLike {
@@ -70,7 +72,9 @@ export function computeCustomerBalances(
     if (revenue <= 0) continue;
     const name = (row.customerName || '').trim() || UNNAMED_CUSTOMER;
     const b = bucket(name);
-    b.billedTotal += revenue;
+    // P2 #13 — partially refunded credit sales still owe the remainder;
+    // fully refunded ones flip to status 'Refunded' and exit above.
+    b.billedTotal += revenue - (Number(row.refundTotal) || 0);
     if (row.saleId) b.openSaleIds.push(row.saleId);
   }
 
