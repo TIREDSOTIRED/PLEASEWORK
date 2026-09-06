@@ -1063,7 +1063,8 @@ export default function RootNavigator({
             lang={lang}
           />
         ) : (
-          <InventoryTab 
+          <InventoryTab
+            lang={lang}
             triggerToast={triggerToast}
             medicines={medicines}
             isLoadingInventory={isLoadingInventory}
