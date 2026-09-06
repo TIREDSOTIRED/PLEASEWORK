@@ -58,7 +58,7 @@ export default function LedgerTab({ salesLogs = [], medicines = [], lang = 'en',
   ? (lang === 'ar' ? 'مرتجع عميل' : 'Customer Return')
   : isSettlement
   ? (lang === 'ar' ? 'دفعة عميل' : 'Customer Payment')
-  : 'POS Sale',
+  : (lang === 'ar' ? 'بيع نقاط بيع' : 'POS Sale'),
   itemsCount: sale.items?.length || 1,
   sale
   };
@@ -364,8 +364,8 @@ export default function LedgerTab({ salesLogs = [], medicines = [], lang = 'en',
   )}
   </td>
   <td className="py-3.5 px-3 text-center">
-  {/* P2 #13 — Return action on real POS sales that still have returnable units */}
-  {tx.type === 'POS Sale' && onProcessRefund && (() => {
+  {/* P2 #13 — Return action on real POS sales (rows with no ledger type) that still have returnable units */}
+  {!tx.sale.type && onProcessRefund && (() => {
   const sale = tx.sale as SaleRecord;
   const returnable = (sale.items || []).reduce(
   (s, i) => s + Math.max(0, (Number(i.quantitySold) || 0) - (Number(sale.refundedQty?.[i.medId]) || 0)),
