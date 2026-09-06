@@ -997,8 +997,9 @@ export default function RootNavigator({
  lang={lang}
  triggerToast={triggerToast}
  externalScannedCode={pendingPosScan}
- pharmacyName={activePharmacy?.displayName || activePharmacy?.name}
- hasCompletedSale={(salesLogs || []).length > 0}
+  pharmacyName={activePharmacy?.displayName || activePharmacy?.name}
+  hasCompletedSale={(salesLogs || []).length > 0}
+  salesLogs={salesLogs}
  />
  )}
 

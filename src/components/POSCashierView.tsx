@@ -7,9 +7,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import { 
  ShoppingCart, Plus, Minus, Trash2, Search, CheckCircle2, Package, Receipt, Zap, PauseCircle,
  Filter, Sparkles, AlertCircle, ChevronDown, RefreshCw, Barcode, Camera, Check, ArrowRight, X, Loader2, ArrowRightLeft,
- Banknote, CreditCard
+ Banknote, CreditCard, History
 } from 'lucide-react';
-import { Medicine } from '../types';
+import { Medicine, SaleRecord } from '../types';
 import { translations } from '../data/translations';
 import { IndexedDbInventoryRepository } from '../infrastructure/storage/IndexedDbInventoryRepository';
 import { useAuth } from '../application/auth/AuthContext';
@@ -46,8 +46,10 @@ interface POSCashierViewProps {
  onAddMedicine?: (m: Medicine) => Promise<void>;
  /** Authoritative tenant display name for tenant-branded receipts (P2 #9). */
  pharmacyName?: string;
- /** Any sale has ever been recorded — drives the first-run checklist (P1 #7). */
- hasCompletedSale?: boolean;
+  /** Any sale has ever been recorded — drives the first-run checklist (P1 #7). */
+  hasCompletedSale?: boolean;
+  /** Live sales ledger (same onSnapshot source as the Ledger tab) — powers the History panel. */
+  salesLogs?: SaleRecord[];
 }
 
 interface CartItem {
@@ -75,9 +77,10 @@ export default function POSCashierView({
  externalScannedCode,
  onOpenScanner,
  onAddToB2BOrder,
- onAddMedicine,
- pharmacyName,
- hasCompletedSale
+  onAddMedicine,
+  pharmacyName,
+  hasCompletedSale,
+  salesLogs = []
 }: POSCashierViewProps) {
  const ui = useUI();
  const lang = propLang || ui.lang || 'ar';
@@ -109,7 +112,10 @@ export default function POSCashierView({
       sessionStorage.setItem('eshmun_pos_active_cart', JSON.stringify(cart));
     } catch (e) {}
   }, [cart]);
- const [isProcessing, setIsProcessing] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  // History panel — a read-only window onto the same salesLogs the Ledger uses.
+  const [showHistory, setShowHistory] = useState(false);
+  const [expandedSaleId, setExpandedSaleId] = useState<string | null>(null);
  const [searchQuery, setSearchQuery] = useState('');
  const [selectedCategory, setSelectedCategory] = useState('all');
  const [displayLimit, setDisplayLimit] = useState(40);
@@ -780,13 +786,101 @@ export default function POSCashierView({
                   {lang === "ar" ? "مسح الباركود، تحديد الدواء، ومتابعة السلة" : "Scan barcode, select medicine, and manage cart"}
                 </p>
               </div>
-              <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-mono border ${
-                scannerReady ? "border-brand-200 text-brand-800 bg-brand-50" : "border-amber-200 text-amber-800 bg-amber-50"
-              }`}>
-                {scannerReady ? <Zap className="w-4 h-4 text-brand-600" /> : <PauseCircle className="w-4 h-4 text-amber-600" />}
-                <span>{scannerReady ? (lang === "ar" ? "الماسح جاهز" : "SCANNER READY") : (lang === "ar" ? "الادخال اليدوي" : "INPUT MODE")}</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowHistory(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border border-slate-200 text-slate-700 bg-white hover:bg-slate-50 transition-colors cursor-pointer"
+                  title={lang === "ar" ? "سجل المبيعات" : "Sales history"}
+                >
+                  <History className="w-4 h-4 text-slate-500" />
+                  {lang === "ar" ? "السجل" : "History"}
+                </button>
+                <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-mono border ${
+                  scannerReady ? "border-brand-200 text-brand-800 bg-brand-50" : "border-amber-200 text-amber-800 bg-amber-50"
+                }`}>
+                  {scannerReady ? <Zap className="w-4 h-4 text-brand-600" /> : <PauseCircle className="w-4 h-4 text-amber-600" />}
+                  <span>{scannerReady ? (lang === "ar" ? "الماسح جاهز" : "SCANNER READY") : (lang === "ar" ? "الادخال اليدوي" : "INPUT MODE")}</span>
+                </div>
               </div>
             </div>
+
+            {/* HISTORY SLIDE-OVER — same live salesLogs source as the Ledger tab */}
+            <AnimatePresence>
+              {showHistory && (
+                <motion.div
+                  className="fixed inset-0 z-50 flex justify-end bg-slate-900/40"
+                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                  onClick={() => setShowHistory(false)}
+                >
+                  <motion.div
+                    className="bg-white w-full max-w-sm h-full shadow-2xl flex flex-col"
+                    initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+                    transition={{ type: 'tween', duration: 0.2 }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex items-center justify-between p-4 border-b border-slate-100">
+                      <h3 className="font-black text-slate-900 flex items-center gap-2">
+                        <History className="w-4 h-4 text-brand-700" />
+                        {lang === "ar" ? "سجل المبيعات" : "Sales History"}
+                      </h3>
+                      <button type="button" onClick={() => setShowHistory(false)} className="p-1.5 rounded-lg hover:bg-slate-100 cursor-pointer" aria-label="close">
+                        <X className="w-4 h-4 text-slate-500" />
+                      </button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-3 space-y-2">
+                      {(salesLogs || []).filter(s => s.type !== 'REFUND' && s.type !== 'CREDIT_SETTLEMENT').slice(0, 25).map((s) => {
+                        const isOpen = expandedSaleId === s.saleId;
+                        const refunded = s.status === 'Refunded' || Number((s as any).refundTotal || 0) > 0;
+                        return (
+                          <div key={s.saleId} className="border border-slate-200 rounded-xl overflow-hidden">
+                            <button
+                              type="button"
+                              onClick={() => setExpandedSaleId(isOpen ? null : s.saleId)}
+                              className="w-full flex items-center justify-between gap-2 p-3 hover:bg-slate-50 transition-colors cursor-pointer text-start"
+                            >
+                              <div className="min-w-0">
+                                <p className="text-xs font-bold text-slate-900 truncate">
+                                  {lang === "ar" ? "فاتورة" : "Invoice"} <span className="font-mono">{(s.saleId || '').slice(-8)}</span>
+                                  {refunded && <span className="ms-2 text-[9px] font-black text-rose-700 bg-rose-50 border border-rose-200 px-1.5 rounded">{lang === "ar" ? "مرتجع" : "REFUNDED"}</span>}
+                                </p>
+                                <p className="text-[10px] text-slate-500 font-mono">
+                                  {s.timestamp ? new Date(s.timestamp).toLocaleString(lang === "ar" ? 'ar-SY' : 'en-GB') : ''}
+                                </p>
+                              </div>
+                              <div className="text-end shrink-0">
+                                <p className="text-xs font-black text-slate-900 font-mono">{(Number(s.totalRevenue) || 0).toLocaleString()} {lang === "ar" ? "ل.س" : "SYP"}</p>
+                                <p className="text-[10px] text-slate-400">
+                                  {s.paymentMethod === 'Credit' ? (lang === "ar" ? "آجل" : "Credit") : (lang === "ar" ? "نقد" : "Cash")} · {(s.items || []).length} {lang === "ar" ? "أصناف" : "items"}
+                                </p>
+                              </div>
+                            </button>
+                            {isOpen && (
+                              <div className="px-3 pb-3 space-y-1.5 border-t border-slate-100 pt-2">
+                                {(s.items || []).map((it, idx) => (
+                                  <div key={idx} className="flex items-center justify-between text-[11px]">
+                                    <span className="text-slate-700 font-medium truncate">{it.name}</span>
+                                    <span className="text-slate-500 font-mono shrink-0 ms-2">{it.quantitySold} × {(it.priceAtSale || 0).toLocaleString()}</span>
+                                  </div>
+                                ))}
+                                <p className="text-[10px] text-slate-400 pt-1">
+                                  {lang === "ar" ? "للإرجاع: افتح تبويب السجل المالي" : "Returns: open the Financial Ledger tab"}
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                      {(salesLogs || []).length === 0 && (
+                        <p className="text-center text-xs text-slate-400 py-10">
+                          {lang === "ar" ? "لا مبيعات بعد — ستظهر هنا مباشرة بعد أول عملية بيع" : "No sales yet — your first sale will appear here instantly"}
+                        </p>
+                      )}
+                    </div>
+                  </motion.div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* SEARCH & SCANNER INPUT */}
             <div className="relative">
