@@ -16,6 +16,7 @@ import {
 import { SaleRecord, Medicine } from '../types';
 import { todayLocalKey, isSameLocalDay } from '../utils/dayKey';
 import { computeCustomerBalances, UNNAMED_CUSTOMER } from '../domain/finance/customerCredit';
+import TabIntro from './ui/TabIntro';
 
 interface LedgerTabProps {
   salesLogs?: SaleRecord[];
@@ -114,9 +115,9 @@ export default function LedgerTab({ salesLogs = [], medicines = [], lang = 'en',
  <Receipt className="w-6 h-6 text-[#047857]" />
  {lang === 'ar' ? 'السجل المالي والحركات' : 'Financial Ledger & Transactions'}
  </h1>
- <p className="text-xs text-slate-500 mt-1">
- {lang === 'ar' ? 'تتبع المبيعات اليومية، الديون المستحقة، وحركات التدوين المالي' : 'Track daily sales, pending accounts, and transaction audit trails'}
- </p>
+  <p className="text-xs text-slate-500 mt-1">
+  <TabIntro tabKey="ledger">{lang === 'ar' ? 'تتبع المبيعات اليومية، الديون المستحقة، وحركات التدوين المالي' : 'Track daily sales, pending accounts, and transaction audit trails'}</TabIntro>
+  </p>
  </div>
  </div>
 

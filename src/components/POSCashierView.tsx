@@ -1,6 +1,7 @@
 import CentralScannerModal from './scanner/CentralScannerModal';
 import InlineCameraScanner from './scanner/InlineCameraScanner';
 import FirstRunChecklist from './FirstRunChecklist';
+import TabIntro from './ui/TabIntro';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Modal } from './ui/Modal';
 import { motion, AnimatePresence } from 'motion/react';
@@ -783,7 +784,7 @@ export default function POSCashierView({
                   {lang === "ar" ? "نقطة البيع (الكاشير)" : "Point of Sale (POS)"}
                 </h2>
                 <p className="text-xs text-slate-500 font-medium mt-0.5">
-                  {lang === "ar" ? "مسح الباركود، تحديد الدواء، ومتابعة السلة" : "Scan barcode, select medicine, and manage cart"}
+                  <TabIntro tabKey="pos">{lang === "ar" ? "مسح الباركود، تحديد الدواء، ومتابعة السلة" : "Scan barcode, select medicine, and manage cart"}</TabIntro>
                 </p>
               </div>
               <div className="flex items-center gap-2">

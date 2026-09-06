@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../application/auth/AuthContext';
-import { HeartPulse, LogOut, Loader2, Camera, LayoutDashboard, ShoppingCart, Package, ScanLine, BarChart3, Settings as SettingsIcon, Activity, Menu, Search, Building2, Sparkles, Globe, Inbox, Tag, Store, Pill, ShoppingBag, FileText, BookOpen, Sun, Moon } from "lucide-react";
+import { HeartPulse, LogOut, Loader2, Camera, LayoutDashboard, ShoppingCart, Package, ScanLine, BarChart3, Settings as SettingsIcon, Activity, Menu, Search, Building2, Sparkles, Globe, Inbox, Tag, Store, Pill, ShoppingBag, FileText, BookOpen, Sun, Moon, MoreHorizontal, ChevronDown } from "lucide-react";
 import DashboardTab from "./DashboardTab";
 import AnalyticsTab from '../../components/AnalyticsTab';
 import SalesAnalyticsTab from '../../components/SalesAnalyticsTab';
@@ -83,6 +83,8 @@ export default function RootNavigator({
  const [inventoryView, setInventoryView] = useState<'inventory' | 'ledger'>('inventory');
  const [activeTab, setActiveTab] = useState<'checkout'|'catalog'|'b2b_marketplace'|'inventory'|'analytics'|'settings'|'scan'|'camera'|'warehouse_inventory'|'warehouse_ingestion'|'b2b_queue'|'warehouse_orders'|'warehouse_offers'>('checkout');
  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
+ // "More" sidebar fold — auto-open when a folded tab is active (P3 nav declutter).
+ const [showMoreTabs, setShowMoreTabs] = useState(() => ['b2b_marketplace', 'b2b_queue'].includes(activeTab as string));
  // Organization profile editor (identity system)
  const [profileEditOpen, setProfileEditOpen] = useState(false);
  const [pendingPosScan, setPendingPosScan] = useState<{ code: string; timestamp: number } | null>(null);
@@ -876,9 +878,38 @@ export default function RootNavigator({
  label: lang === 'ar' ? 'السجل' : 'Ledger',
  icon: FileText,
  }
- ];
+  ];
 
- return (
+  // Progressive disclosure: the desktop sidebar keeps the daily tabs visible
+  // and folds B2B surfaces behind a "More" toggle (mobile dock stays full).
+  const SECONDARY_TAB_IDS = ['b2b_marketplace', 'b2b_queue'];
+  const secondarySidebarTabs = isWarehouse ? [] : mobileDockTabs.filter(t => SECONDARY_TAB_IDS.includes(t.id));
+  const primarySidebarTabs = mobileDockTabs.filter(t => !secondarySidebarTabs.includes(t));
+  const renderTabButton = (tab: (typeof mobileDockTabs)[number]) => {
+  const isActive = activeTab === tab.id || (tab.id === 'inventory' && activeTab === 'warehouse_inventory');
+  return (
+  <button
+  key={tab.id}
+  onClick={() => {
+  if (tab.id === 'inventory' && activePharmacy?.tenantType === "WHOLESALE_WAREHOUSE") {
+  setActiveTab('warehouse_inventory');
+  } else {
+  setActiveTab(tab.id as any);
+  }
+  }}
+  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-semibold border-l-2 transition-colors cursor-pointer ${
+  isActive
+  ? 'bg-slate-100 text-slate-900 border-brand-700'
+  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 border-transparent'
+  }`}
+  >
+  <tab.icon className={`w-4 h-4 ${isActive ? 'text-brand-700' : 'text-slate-400'}`} />
+  <span>{tab.label}</span>
+  </button>
+  );
+  };
+
+  return (
  <>
  <div className="fixed inset-0 flex bg-slate-50 overflow-hidden text-slate-900 font-sans antialiased">
  
@@ -899,30 +930,25 @@ export default function RootNavigator({
  </div>
 
  <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
- {mobileDockTabs.map((tab) => {
- const isActive = activeTab === tab.id || (tab.id === 'inventory' && activeTab === 'warehouse_inventory');
- return (
- <button
- key={tab.id}
- onClick={() => {
- if (tab.id === 'inventory' && activePharmacy?.tenantType === "WHOLESALE_WAREHOUSE") {
- setActiveTab('warehouse_inventory');
- } else {
- setActiveTab(tab.id as any);
- }
- }}
- className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-semibold border-l-2 transition-colors ${
- isActive
- ? 'bg-slate-100 text-slate-900 border-brand-700'
- : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 border-transparent'
- }`}
- >
- <tab.icon className={`w-4 h-4 ${isActive ? 'text-brand-700' : 'text-slate-400'}`} />
- <span>{tab.label}</span>
- </button>
- );
- })}
- </nav>
+  {primarySidebarTabs.map((tab) => renderTabButton(tab))}
+  {secondarySidebarTabs.length > 0 && (
+  <>
+  <button
+  onClick={() => setShowMoreTabs(v => !v)}
+  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-semibold border-l-2 transition-colors cursor-pointer ${
+  secondarySidebarTabs.some(t => t.id === activeTab)
+  ? 'bg-slate-100 text-slate-900 border-brand-700'
+  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50 border-transparent'
+  }`}
+  >
+  <MoreHorizontal className={`w-4 h-4 ${secondarySidebarTabs.some(t => t.id === activeTab) ? 'text-brand-700' : 'text-slate-400'}`} />
+  <span className="flex-1 text-start">{lang === 'ar' ? 'المزيد' : 'More'}</span>
+  <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${showMoreTabs ? 'rotate-180' : ''}`} />
+  </button>
+  {showMoreTabs && secondarySidebarTabs.map((tab) => renderTabButton(tab))}
+  </>
+  )}
+  </nav>
 
  <div className="p-3 border-t border-slate-100 flex items-center gap-2 shrink-0">
  {themeToggle}
