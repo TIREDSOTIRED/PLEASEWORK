@@ -24,40 +24,70 @@ export class IndexedDBStore {
   const dbName = `saidalete_local_db_${tenantId}`;
 
   const promise = new Promise<IDBDatabase>((resolve, reject) => {
- // Access standard indexedDB
- const indexedDB = window.indexedDB || (window as any).mozIndexedDB || (window as any).webkitIndexedDB || (window as any).msIndexedDB;
- if (!indexedDB) {
- reject(new Error("Your browser does not support a stable version of IndexedDB."));
- return;
- }
+  // Access standard indexedDB
+  const indexedDB = window.indexedDB || (window as any).mozIndexedDB || (window as any).webkitIndexedDB || (window as any).msIndexedDB;
+  if (!indexedDB) {
+  reject(new Error("Your browser does not support a stable version of IndexedDB."));
+  return;
+  }
 
- const request = indexedDB.open(dbName, this.DB_VERSION);
+  const request = indexedDB.open(dbName, this.DB_VERSION);
 
- request.onerror = (event: any) => {
- reject(new Error(`Failed to open IndexedDB: ${request.error?.message || event.target.errorCode}`));
- };
+  // WATCHDOG — a version upgrade BLOCKS while any other tab holds an older
+  // connection, and an 'open' that never settles hangs every repo call
+  // forever (the phone bug: Add Medicine silently swallowed, mirror-only
+  // card wiped on reload). The mirror must FAIL FAST, not hang: reject
+  // after 8s or on 'blocked'. Callers treat the mirror as best-effort;
+  // Firestore (the source of truth) is never gated on this promise.
+  const settled = { done: false };
+  const watchdog = setTimeout(() => {
+  if (!settled.done) {
+  settled.done = true;
+  reject(new Error("IndexedDB open timed out (likely an upgrade blocked by another tab — mirror disabled this session; Firestore continues)."));
+  }
+  }, 8000);
 
- request.onsuccess = () => {
- resolve(request.result);
- };
+  request.onblocked = () => {
+  if (!settled.done) {
+  settled.done = true;
+  clearTimeout(watchdog);
+  reject(new Error("IndexedDB upgrade blocked by another tab. Close other app tabs and reload — Firestore continues meanwhile."));
+  }
+  };
 
- request.onupgradeneeded = (event: IDBVersionChangeEvent) => {
- const db = request.result;
+  request.onerror = (event: any) => {
+  if (!settled.done) {
+  settled.done = true;
+  clearTimeout(watchdog);
+  reject(new Error(`Failed to open IndexedDB: ${request.error?.message || event.target.errorCode}`));
+  }
+  };
 
- // 1. drug_master store
- if (!db.objectStoreNames.contains("drug_master")) {
- const drugMasterStore = db.createObjectStore("drug_master", { keyPath: "id" });
- // V3: gtin is NO LONGER unique — the master catalog legitimately contains
- // multiple sako entries sharing one barcode (and comma variants); a unique
- // index made every duplicate-barcode mirror save throw and, worse, abort
- // the authoritative Firestore intake write (POS scan-to-add bug).
- drugMasterStore.createIndex("gtin", "gtin", { unique: false });
- } else if (event.oldVersion < 3) {
- // Upgrade v2 → v3: drop the unique gtin index, recreate it non-unique.
- const drugMasterStore = request.transaction!.objectStore("drug_master");
- if (drugMasterStore.indexNames.contains("gtin")) drugMasterStore.deleteIndex("gtin");
- drugMasterStore.createIndex("gtin", "gtin", { unique: false });
- }
+  request.onsuccess = () => {
+  if (!settled.done) {
+  settled.done = true;
+  clearTimeout(watchdog);
+  resolve(request.result);
+  }
+  };
+
+  request.onupgradeneeded = (event: IDBVersionChangeEvent) => {
+  const db = request.result;
+
+  // 1. drug_master store
+  if (!db.objectStoreNames.contains("drug_master")) {
+  const drugMasterStore = db.createObjectStore("drug_master", { keyPath: "id" });
+  // V3: gtin is NO LONGER unique — the master catalog legitimately contains
+  // multiple sako entries sharing one barcode (and comma variants); a unique
+  // index made every duplicate-barcode mirror save throw and, worse, abort
+  // the authoritative Firestore intake write (POS scan-to-add bug).
+  drugMasterStore.createIndex("gtin", "gtin", { unique: false });
+  } else if (event.oldVersion < 3) {
+  // Upgrade v2 → v3: drop the unique gtin index, recreate it non-unique.
+  const drugMasterStore = request.transaction!.objectStore("drug_master");
+  if (drugMasterStore.indexNames.contains("gtin")) drugMasterStore.deleteIndex("gtin");
+  drugMasterStore.createIndex("gtin", "gtin", { unique: false });
+  }
 
  // 2. drug_batch store
  if (!db.objectStoreNames.contains("drug_batch")) {
