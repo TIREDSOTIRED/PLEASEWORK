@@ -367,14 +367,22 @@ export default function RootNavigator({
   const existingData = resolution.existing?.data;
   const finalizedMedicine = { ...m, id: safeMedId, catalogId: canonicalCatalogId };
 
-  const repo = new IndexedDbInventoryRepository();
-  // IDB mirror is keyed by catalogId — POS offline batch lookup
-  // (getValidBatchesForDrug) queries by the card's catalogId.
-  const drugMaster = new DrugMaster(canonicalCatalogId, m.barcode || '', m.name, m.genericName || m.name, false, 25);
-  await repo.saveDrugMaster(drugMaster);
-  const batchId = `batch-${Date.now()}`;
-  const drugBatch = new DrugBatch(batchId, canonicalCatalogId, m.batchNumber || m.barcode || 'N/A', new Date(m.expiryDate), deriveBatchCost(m.costPrice).cost, m.stock, false);
-  await repo.saveDrugBatch(drugBatch);
+ const repo = new IndexedDbInventoryRepository();
+ // IDB mirror is keyed by catalogId — POS offline batch lookup
+ // (getValidBatchesForDrug) queries by the card's catalogId.
+ // MIRROR-ONLY: these saves must NEVER abort the authoritative Firestore
+ // write below (a gtin-index collision here used to kill scan-to-add and
+ // every restock — the card existed only in the optimistic mirror, so
+ // checkout FEFO found zero batches and sales failed with 'unknown' stock).
+ try {
+ const drugMaster = new DrugMaster(canonicalCatalogId, m.barcode || '', m.name, m.genericName || m.name, false, 25);
+ await repo.saveDrugMaster(drugMaster);
+ const batchId = `batch-${Date.now()}`;
+ const drugBatch = new DrugBatch(batchId, canonicalCatalogId, m.batchNumber || m.barcode || 'N/A', new Date(m.expiryDate), deriveBatchCost(m.costPrice).cost, m.stock, false);
+ await repo.saveDrugBatch(drugBatch);
+ } catch (mirrorErr) {
+ console.warn('[intake] IDB mirror save failed (Firestore write continues):', mirrorErr);
+ }
   // NOTE: no sync-queue payload is enqueued here. The medicine is written
   // directly to Firestore below (Firestore offline persistence covers the
   // offline case natively). The old ADD_MEDICINE queue payload targeted a

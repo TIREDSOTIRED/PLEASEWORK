@@ -1,7 +1,7 @@
 export class IndexedDBStore {
  private static instances = new Map<string, Promise<IDBDatabase>>();
  private static activeTenantId: string = "default";
- private static readonly DB_VERSION = 2;
+ private static readonly DB_VERSION = 3;
 
  public static setTenant(tenantId: string) {
  this.activeTenantId = tenantId;
@@ -47,7 +47,16 @@ export class IndexedDBStore {
  // 1. drug_master store
  if (!db.objectStoreNames.contains("drug_master")) {
  const drugMasterStore = db.createObjectStore("drug_master", { keyPath: "id" });
- drugMasterStore.createIndex("gtin", "gtin", { unique: true });
+ // V3: gtin is NO LONGER unique — the master catalog legitimately contains
+ // multiple sako entries sharing one barcode (and comma variants); a unique
+ // index made every duplicate-barcode mirror save throw and, worse, abort
+ // the authoritative Firestore intake write (POS scan-to-add bug).
+ drugMasterStore.createIndex("gtin", "gtin", { unique: false });
+ } else if (event.oldVersion < 3) {
+ // Upgrade v2 → v3: drop the unique gtin index, recreate it non-unique.
+ const drugMasterStore = request.transaction!.objectStore("drug_master");
+ if (drugMasterStore.indexNames.contains("gtin")) drugMasterStore.deleteIndex("gtin");
+ drugMasterStore.createIndex("gtin", "gtin", { unique: false });
  }
 
  // 2. drug_batch store
