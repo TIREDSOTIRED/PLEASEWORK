@@ -357,11 +357,11 @@ export default function POSCashierView({
  batchExpiry = batches[0].expiryDate.toISOString().split('T')[0];
  } else {
  allocatedBatch = med.batchNumber || "BATCH-N/A";
- batchExpiry = new Date(med.expiryDate).toISOString().split('T')[0];
+ batchExpiry = med.expiryDate ? new Date(med.expiryDate).toISOString().split('T')[0] : 'Unknown';
  }
  } catch (e) {
  allocatedBatch = med.batchNumber || "BATCH-N/A";
- batchExpiry = new Date(med.expiryDate).toISOString().split('T')[0];
+ batchExpiry = med.expiryDate ? new Date(med.expiryDate).toISOString().split('T')[0] : 'Unknown';
  }
  
  setCart(prev => {
@@ -472,6 +472,10 @@ export default function POSCashierView({
   ownerId: currentSession?.pharmacyId,
   lastUpdated: new Date().toISOString()
   });
+  // Honest unknown expiry: normalizeMedicine would fabricate TODAY, which makes
+  // the batch instantly expired and unsellable (FEFO). The card stays Unknown
+  // until real intake records the true expiry.
+  newMed.expiryDate = '';
   try {
   if (onAddMedicine) {
   await onAddMedicine(newMed);

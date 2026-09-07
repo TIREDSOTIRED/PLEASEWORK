@@ -425,7 +425,9 @@ export default function RootNavigator({
  batchId: batchId,
  medId: safeMedId,
  batchNumber: m.batchNumber || m.barcode || 'N/A',
- expiryDate: new Date(m.expiryDate).toISOString(),
+ // Unknown expiry stays EMPTY (honest) — the sale-side FEFO reads missing
+ // expiry as far-future valid, matching the intake Unknown pattern.
+ expiryDate: m.expiryDate ? new Date(m.expiryDate).toISOString() : '',
  cost: batchCost.cost,
  costEstimated: batchCost.costEstimated,
  stock: m.stock,
