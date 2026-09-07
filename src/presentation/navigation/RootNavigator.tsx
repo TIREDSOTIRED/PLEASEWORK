@@ -378,7 +378,7 @@ export default function RootNavigator({
  try {
  const drugMaster = new DrugMaster(canonicalCatalogId, m.barcode || '', m.name, m.genericName || m.name, false, 25);
  await repo.saveDrugMaster(drugMaster);
- const drugBatch = new DrugBatch(batchId, canonicalCatalogId, m.batchNumber || m.barcode || 'N/A', new Date(m.expiryDate), deriveBatchCost(m.costPrice).cost, m.stock, false);
+ const drugBatch = new DrugBatch(batchId, canonicalCatalogId, m.batchNumber || m.barcode || 'N/A', m.expiryDate ? new Date(m.expiryDate) : new Date('2099-12-31'), deriveBatchCost(m.costPrice).cost, m.stock, false);
  await repo.saveDrugBatch(drugBatch);
  } catch (mirrorErr) {
  console.warn('[intake] IDB mirror save failed (Firestore write continues):', mirrorErr);
