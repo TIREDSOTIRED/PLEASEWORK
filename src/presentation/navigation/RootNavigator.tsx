@@ -368,6 +368,7 @@ export default function RootNavigator({
   const finalizedMedicine = { ...m, id: safeMedId, catalogId: canonicalCatalogId };
 
  const repo = new IndexedDbInventoryRepository();
+ const batchId = `batch-${Date.now()}`;
  // IDB mirror is keyed by catalogId — POS offline batch lookup
  // (getValidBatchesForDrug) queries by the card's catalogId.
  // MIRROR-ONLY: these saves must NEVER abort the authoritative Firestore
@@ -377,7 +378,6 @@ export default function RootNavigator({
  try {
  const drugMaster = new DrugMaster(canonicalCatalogId, m.barcode || '', m.name, m.genericName || m.name, false, 25);
  await repo.saveDrugMaster(drugMaster);
- const batchId = `batch-${Date.now()}`;
  const drugBatch = new DrugBatch(batchId, canonicalCatalogId, m.batchNumber || m.barcode || 'N/A', new Date(m.expiryDate), deriveBatchCost(m.costPrice).cost, m.stock, false);
  await repo.saveDrugBatch(drugBatch);
  } catch (mirrorErr) {
