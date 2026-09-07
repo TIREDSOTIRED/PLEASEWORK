@@ -367,27 +367,6 @@ export default function RootNavigator({
   const existingData = resolution.existing?.data;
   const finalizedMedicine = { ...m, id: safeMedId, catalogId: canonicalCatalogId };
 
- const repo = new IndexedDbInventoryRepository();
- const batchId = `batch-${Date.now()}`;
- // IDB mirror is keyed by catalogId — POS offline batch lookup
- // (getValidBatchesForDrug) queries by the card's catalogId.
- // MIRROR-ONLY: these saves must NEVER abort the authoritative Firestore
- // write below (a gtin-index collision here used to kill scan-to-add and
- // every restock — the card existed only in the optimistic mirror, so
- // checkout FEFO found zero batches and sales failed with 'unknown' stock).
- try {
- const drugMaster = new DrugMaster(canonicalCatalogId, m.barcode || '', m.name, m.genericName || m.name, false, 25);
- await repo.saveDrugMaster(drugMaster);
- const drugBatch = new DrugBatch(batchId, canonicalCatalogId, m.batchNumber || m.barcode || 'N/A', m.expiryDate ? new Date(m.expiryDate) : new Date('2099-12-31'), deriveBatchCost(m.costPrice).cost, m.stock, false);
- await repo.saveDrugBatch(drugBatch);
- } catch (mirrorErr) {
- console.warn('[intake] IDB mirror save failed (Firestore write continues):', mirrorErr);
- }
-  // NOTE: no sync-queue payload is enqueued here. The medicine is written
-  // directly to Firestore below (Firestore offline persistence covers the
-  // offline case natively). The old ADD_MEDICINE queue payload targeted a
-  // REST endpoint that never existed and only produced phantom "failed" items.
-
   const addStock = Number(m.stock) || 0;
   const nowIso = new Date().toISOString();
 
@@ -415,7 +394,8 @@ export default function RootNavigator({
   await setDoc(medRef, { ...finalizedMedicine, pharmacyId: tenantId });
   }
 
- const batchRef = doc(db, 'tenants', currentSession.pharmacyId, 'storage_inventory', safeMedId, 'batches', batchId);
+  const batchId = `batch-${Date.now()}`;
+  const batchRef = doc(db, 'tenants', currentSession.pharmacyId, 'storage_inventory', safeMedId, 'batches', batchId);
  // Cost provenance (batch-cost-profit fix): a real purchase cost becomes the
  // batch cost; a missing/zero one stays UNKNOWN (0 + costEstimated) — never
  // the selling price. POS's resolveUnitCost turns 0 into an honest
@@ -434,7 +414,22 @@ export default function RootNavigator({
  isSpoiled: false,
  lastUpdated: new Date().toISOString()
  };
- await setDoc(batchRef, batchData);
+  await setDoc(batchRef, batchData);
+
+  // IDB mirror — FIRE-AND-FORGET and NEVER awaited by intake. The v3 schema
+  // migration can hang while another open tab holds an old IDB connection;
+  // when the mirror ran BEFORE the Firestore write (previous order), that
+  // hang swallowed the whole add: optimistic card, wiped on reload, nothing
+  // in the ledger. Firestore is the source of truth; the mirror catches up.
+  const repo = new IndexedDbInventoryRepository();
+  void (async () => {
+  try {
+  await repo.saveDrugMaster(new DrugMaster(canonicalCatalogId, m.barcode || '', m.name, m.genericName || m.name, false, 25));
+  await repo.saveDrugBatch(new DrugBatch(batchId, canonicalCatalogId, m.batchNumber || m.barcode || 'N/A', m.expiryDate ? new Date(m.expiryDate) : new Date('2099-12-31'), batchCost.cost, addStock, false));
+  } catch (mirrorErr) {
+  console.warn('[intake] IDB mirror save failed (non-blocking):', mirrorErr);
+  }
+  })();
 
  // Offer availability mirror — intake/restock raises active offers too
  // (Option B). Own batch: the primary writes above must never wait on it.
