@@ -15,3 +15,6 @@ marketing/outbox/
 
 # graphify local index (rebuildable)
 .graphify/
+
+# Firebase deploy artifacts
+.firebase/
