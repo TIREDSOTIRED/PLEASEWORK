@@ -460,6 +460,11 @@ export default function POSCashierView({
   category: String(catalogItem.company_name || catalogItem.company || 'General'),
   dosageForm: String(catalogItem.form || 'Tablet'),
   price: Number(catalogItem.price || catalogItem.public_price || catalogItem.syp_price) || 0,
+  // Honest unknown acquisition cost: deriveBatchCost(0) marks the batch
+  // costEstimated so profit math reports 'unavailable' instead of guessing.
+  // (A missing costPrice here becomes `undefined` through normalizeMedicine,
+  // which Firestore setDoc() rejects — that silently killed scan-to-add.)
+  costPrice: 0,
   // The scanned box physically exists — one truthful unit; adjust in intake.
   stock: 1,
   minThreshold: 5,
