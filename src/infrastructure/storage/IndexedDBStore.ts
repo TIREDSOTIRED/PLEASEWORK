@@ -15,15 +15,39 @@ export class IndexedDBStore {
  * Initializes the database in a thread-safe, promise-based manner.
  * Multiple concurrent calls will resolve to the same IDBDatabase promise instance.
  */
- public static getDatabase(): Promise<IDBDatabase> {
-  const tenantId = this.activeTenantId;
-  if (this.instances.has(tenantId)) {
-  return this.instances.get(tenantId)!;
+  public static getDatabase(): Promise<IDBDatabase> {
+   const tenantId = this.activeTenantId;
+   if (this.instances.has(tenantId)) {
+   return this.instances.get(tenantId)!;
+   }
+
+   const dbName = `saidalete_local_db_${tenantId}`;
+
+   // FRESH-DB FALLBACK: a schema-version upgrade (v2→v3) BLOCKS while any
+   // other tab holds an older connection — often for hours on phones with
+   // background tabs — which killed sync ("خطأ في المزامنة") and intake
+   // mirror saves on the device. The mirror is disposable (Firestore is the
+   // source of truth), so on blocked/timeout we simply open a MIGRATED
+   // suffixed database that no legacy connection can block, once per tenant.
+   return this.openNamed(dbName).catch((err: Error) => {
+   if (this.migratedTenants.has(tenantId)) throw err;
+   this.migratedTenants.add(tenantId);
+   console.warn('[idb] open blocked/timed out — falling back to migrated database:', err.message);
+   const fallbackName = `${dbName}_m3`;
+   const p = this.openNamed(fallbackName);
+   this.instances.set(tenantId, p);
+   return p;
+   }).then((db) => {
+   const p = Promise.resolve(db);
+   this.instances.set(tenantId, p);
+   return db;
+   });
   }
 
-  const dbName = `saidalete_local_db_${tenantId}`;
+  private static migratedTenants: Set<string> = new Set();
 
-  const promise = new Promise<IDBDatabase>((resolve, reject) => {
+  private static openNamed(dbName: string): Promise<IDBDatabase> {
+  return new Promise<IDBDatabase>((resolve, reject) => {
   // Access standard indexedDB
   const indexedDB = window.indexedDB || (window as any).mozIndexedDB || (window as any).webkitIndexedDB || (window as any).msIndexedDB;
   if (!indexedDB) {
@@ -33,17 +57,14 @@ export class IndexedDBStore {
 
   const request = indexedDB.open(dbName, this.DB_VERSION);
 
-  // WATCHDOG — a version upgrade BLOCKS while any other tab holds an older
-  // connection, and an 'open' that never settles hangs every repo call
-  // forever (the phone bug: Add Medicine silently swallowed, mirror-only
-  // card wiped on reload). The mirror must FAIL FAST, not hang: reject
-  // after 8s or on 'blocked'. Callers treat the mirror as best-effort;
-  // Firestore (the source of truth) is never gated on this promise.
+  // WATCHDOG — reject fast on blocked upgrades or stuck opens instead of
+  // hanging every repo call forever. Callers treat the mirror as
+  // best-effort; Firestore (the source of truth) is never gated here.
   const settled = { done: false };
   const watchdog = setTimeout(() => {
   if (!settled.done) {
   settled.done = true;
-  reject(new Error("IndexedDB open timed out (likely an upgrade blocked by another tab — mirror disabled this session; Firestore continues)."));
+  reject(new Error("IndexedDB open timed out (likely an upgrade blocked by another tab)."));
   }
   }, 8000);
 
@@ -51,7 +72,7 @@ export class IndexedDBStore {
   if (!settled.done) {
   settled.done = true;
   clearTimeout(watchdog);
-  reject(new Error("IndexedDB upgrade blocked by another tab. Close other app tabs and reload — Firestore continues meanwhile."));
+  reject(new Error("IndexedDB upgrade blocked by another tab."));
   }
   };
 
@@ -117,27 +138,15 @@ export class IndexedDBStore {
  ordersStore.createIndex("createdAt", "createdAt", { unique: false });
  }
  
- // 6. pos_transactions store
- if (!db.objectStoreNames.contains("pos_transactions")) {
- const posTransactionsStore = db.createObjectStore("pos_transactions", { keyPath: "transactionId" });
- posTransactionsStore.createIndex("status", "status", { unique: false });
- posTransactionsStore.createIndex("createdAt", "createdAt", { unique: false });
- }
- };
- });
-
- // Cache the open attempt, but evict it on rejection so a transient
- // failure (private mode, storage pressure, version error) can be retried
- // on the next call instead of poisoning this tenant's DB until reload.
- promise.catch(() => {
- if (this.instances.get(tenantId) === promise) {
- this.instances.delete(tenantId);
- }
- });
-
- this.instances.set(tenantId, promise);
- return promise;
- }
+  // 6. pos_transactions store
+  if (!db.objectStoreNames.contains("pos_transactions")) {
+  const posTransactionsStore = db.createObjectStore("pos_transactions", { keyPath: "transactionId" });
+  posTransactionsStore.createIndex("status", "status", { unique: false });
+  posTransactionsStore.createIndex("createdAt", "createdAt", { unique: false });
+  }
+  };
+  });
+  }
 
  /**
  * Helper to execute a database operation wrapped in a Promise.
