@@ -10,7 +10,7 @@ import {
  Filter, Sparkles, AlertCircle, ChevronDown, RefreshCw, Barcode, Camera, Check, ArrowRight, X, Loader2, ArrowRightLeft,
  Banknote, CreditCard, History
 } from 'lucide-react';
-import { Medicine, SaleRecord } from '../types';
+import { Medicine, SaleRecord, normalizeMedicine } from '../types';
 import { translations } from '../data/translations';
 import { IndexedDbInventoryRepository } from '../infrastructure/storage/IndexedDbInventoryRepository';
 import { useAuth } from '../application/auth/AuthContext';
@@ -335,16 +335,16 @@ export default function POSCashierView({
  stateRef.current = { cart, searchQuery, filteredMedicines, selectedIndex };
  }, [cart, searchQuery, filteredMedicines, selectedIndex]);
 
- // Add Item to Cart
- const addItemToCart = useCallback(async (med: Medicine, qty: number = 1) => {
- if (med.stock <= 0) {
- hardware.playScanError();
- triggerToast(lang === 'ar' ? ' نفد المخزون! الكمية الحالية: 0.' : ' Out of Stock! Current quantity: 0.', 'error');
- return;
- }
- 
- // Play success beep when item is successfully added
- hardware.playScanSuccess();
+  // Add Item to Cart
+  const addItemToCart = useCallback(async (med: Medicine, qty: number = 1) => {
+  if (med.stock <= 0) {
+  hardware.playScanError();
+  triggerToast(lang === 'ar' ? ' نفد المخزون! الكمية الحالية: 0.' : ' Out of Stock! Current quantity: 0.', 'error');
+  return;
+  }
+
+  // NOTE: success beep fires ONLY inside setCart once the outcome is known —
+  // a premature beep here caused double/error-then-success sounds.
  
  let allocatedBatch = "N/A";
  let batchExpiry = "";
@@ -392,8 +392,8 @@ export default function POSCashierView({
  }, 800);
  }, [lang, triggerToast, hardware]);
 
- // Handle scanned barcode
- const handleScan = useCallback((code: string) => {
+  // Handle scanned barcode
+  const handleScan = useCallback(async (code: string) => {
  const normCode = normalizeBarcode(code);
  if (!normCode) return;
 
@@ -432,12 +432,48 @@ export default function POSCashierView({
    });
  }
  
- if (matched) {
- addItemToCart(matched);
- return;
- }
+  if (matched) {
+  addItemToCart(matched);
+  return;
+  }
 
- hardware.playScanError();
+  // Fallback 2: catalog lookup — scan-to-add a medicine that exists in the
+  // national catalog but not yet in this tenant's inventory (P3).
+  const catalogItem = findMedicineByCode(lookupCode)
+  || (parsed.raw ? findMedicineByCode(normalizeBarcode(parsed.raw)) : null);
+  if (catalogItem) {
+  const newMed = normalizeMedicine({
+  id: `med-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+  catalogId: catalogItem.id ? String(catalogItem.id) : undefined,
+  name: catalogItem.name || catalogItem.nameEn || String(catalogItem.code || lookupCode),
+  barcode: lookupCode,
+  genericName: catalogItem.composition || catalogItem.nameEn || '',
+  category: catalogItem.company || catalogItem.company_name || 'General',
+  dosageForm: catalogItem.form || 'Tablet',
+  price: Number(catalogItem.price) || 0,
+  // The scanned box physically exists — one truthful unit; adjust in intake.
+  stock: 1,
+  minThreshold: 5,
+  batchNumber: lookupCode,
+  ownerId: currentSession?.pharmacyId,
+  lastUpdated: new Date().toISOString()
+  });
+  try {
+  if (onAddMedicine) {
+  await onAddMedicine(newMed);
+  triggerToast(
+  lang === 'ar' ? `تمت إضافة ${newMed.name} من الكتالوج (1 وحدة)` : `Added ${newMed.name} from catalog (1 unit)`,
+  'success'
+  );
+  addItemToCart(newMed, 1);
+  return;
+  }
+  } catch (e) {
+  console.warn('POS scan-to-add failed:', e);
+  }
+  }
+
+  hardware.playScanError();
  setUnmappedBarcode(lookupCode);
  
  if (triggerToast) {
@@ -448,7 +484,7 @@ export default function POSCashierView({
  'error'
  );
  }
- }, [medicines, addItemToCart, hardware, lang, triggerToast]);
+  }, [medicines, addItemToCart, hardware, lang, triggerToast, findMedicineByCode, onAddMedicine, currentSession]);
 
  useEffect(() => {
  if (externalScannedCode) {
