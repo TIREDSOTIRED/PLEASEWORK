@@ -437,20 +437,29 @@ export default function POSCashierView({
   return;
   }
 
-  // Fallback 2: catalog lookup — scan-to-add a medicine that exists in the
-  // national catalog but not yet in this tenant's inventory (P3).
-  const catalogItem = findMedicineByCode(lookupCode)
-  || (parsed.raw ? findMedicineByCode(normalizeBarcode(parsed.raw)) : null);
+  // Fallback 2: local catalog lookup — scan-to-add a medicine that exists in
+  // the national catalog but not yet in this tenant's inventory. Uses the
+  // IndexedDB local catalog (syncEngine) — the SAME always-available source
+  // the ledger/intake scanner uses (the in-RAM CatalogContext map is empty
+  // until the full catalog finishes loading, which made the first attempt fail).
+  let catalogItem: any = null;
+  try {
+  const { findLocalMedByBarcode } = await import('../services/syncEngine');
+  catalogItem = await findLocalMedByBarcode(lookupCode);
+  if (!catalogItem && parsed.raw) catalogItem = await findLocalMedByBarcode(normalizeBarcode(parsed.raw));
+  } catch (e) {
+  console.warn('POS local catalog lookup failed:', e);
+  }
   if (catalogItem) {
   const newMed = normalizeMedicine({
   id: `med-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-  catalogId: catalogItem.id ? String(catalogItem.id) : undefined,
-  name: catalogItem.name || catalogItem.nameEn || String(catalogItem.code || lookupCode),
+  catalogId: String(catalogItem.sako || catalogItem.id || lookupCode),
+  name: String(catalogItem.name || catalogItem.name_en || lookupCode),
   barcode: lookupCode,
-  genericName: catalogItem.composition || catalogItem.nameEn || '',
-  category: catalogItem.company || catalogItem.company_name || 'General',
-  dosageForm: catalogItem.form || 'Tablet',
-  price: Number(catalogItem.price) || 0,
+  genericName: String(catalogItem.composition_key || catalogItem.nameEn || ''),
+  category: String(catalogItem.company_name || catalogItem.company || 'General'),
+  dosageForm: String(catalogItem.form || 'Tablet'),
+  price: Number(catalogItem.price || catalogItem.public_price || catalogItem.syp_price) || 0,
   // The scanned box physically exists — one truthful unit; adjust in intake.
   stock: 1,
   minThreshold: 5,
@@ -484,7 +493,7 @@ export default function POSCashierView({
  'error'
  );
  }
-  }, [medicines, addItemToCart, hardware, lang, triggerToast, findMedicineByCode, onAddMedicine, currentSession]);
+  }, [medicines, addItemToCart, hardware, lang, triggerToast, onAddMedicine, currentSession]);
 
  useEffect(() => {
  if (externalScannedCode) {
