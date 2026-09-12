@@ -31,9 +31,17 @@ export interface Medicine {
  dosageForm: string; // Tablet, Syrup, Injection, Capsule, etc.
  strength: string; // e.g., 500mg, 10mg
  supplier: string;
- ownerId: string; // Placeholder for Firestore multi-tenant security
- lastUpdated: string; // ISO format
- history: StockHistoryLog[];
+  ownerId: string; // Placeholder for Firestore multi-tenant security
+  lastUpdated: string; // ISO format
+  history: StockHistoryLog[];
+
+  /**
+   * Sales-first model: this card represents a catalog product sold WITHOUT a
+   * managed inventory baseline — no batches, no stock tracking, no FEFO.
+   * Set only on POS sale cards built from the catalog; never persisted as
+   * inventory. The sale itself (cash or credit) records fully in the ledger.
+   */
+  unmanaged?: boolean;
 }
 
 export interface AppState {
@@ -48,11 +56,17 @@ export interface AppState {
 }
 
 export interface SaleItem {
- medId: string;
- name: string;
- quantitySold: number;
- priceAtSale: number;
- costAtSale: number;
+  medId: string;
+  name: string;
+  quantitySold: number;
+  priceAtSale: number;
+  costAtSale: number;
+  // Truthful cost provenance: true when the unit cost was unavailable (0).
+  costEstimated?: boolean;
+  // Batch allocations — empty/absent for UNMANAGED sale lines (no inventory).
+  allocations?: { batchId: string; quantity: number; priceAtSale: number; costAtSale: number; costSource: string }[];
+  // Sales-first: line sold without any managed inventory (no stock mutation).
+  unmanaged?: boolean;
 }
 
 export interface SaleRecord {

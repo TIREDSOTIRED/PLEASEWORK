@@ -18,6 +18,8 @@ export interface RefundSaleItemLike {
   name?: string;
   quantitySold?: number;
   priceAtSale?: number;
+  /** Sales-first: line was sold without managed inventory — no stock return. */
+  unmanaged?: boolean;
 }
 
 export interface RefundSaleLike {

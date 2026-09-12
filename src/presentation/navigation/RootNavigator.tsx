@@ -510,10 +510,10 @@ export default function RootNavigator({
  if (!currentSession?.pharmacyId || !db) return { success: false };
  try {
  const employeeId = currentSession.email || 'unknown';
- const saleId = checkoutSessionId || `SALE-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const saleId = checkoutSessionId || `SALE-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
- const { writeBatch, doc, increment, collection, getDocs, arrayUnion } = await import('firebase/firestore');
- const batch = writeBatch(db);
+  const { writeBatch, doc, increment, collection, getDocs, getDoc, arrayUnion } = await import('firebase/firestore');
+  const batch = writeBatch(db);
 
  const saleRecordItems = [];
  const totalRevenue = cartItems.reduce((sum, item) => sum + (item.quantitySold * item.priceAtSale), 0);
@@ -523,17 +523,50 @@ export default function RootNavigator({
  let totalKnownCost = 0;
  let unknownCostItemCount = 0;
 
- // Perform FEFO using Firestore local cache
- for (const cartItem of cartItems) {
- const safeMedId = String(cartItem.medId).replace(/\//g, '_');
- const batchesRef = collection(db, 'tenants', currentSession.pharmacyId, 'storage_inventory', safeMedId, 'batches');
- const batchesSnapshot = await getDocs(batchesRef);
- 
- if (batchesSnapshot.empty && batchesSnapshot.metadata.fromCache && cartItem.quantitySold > 0) {
- return { success: false, error: `Offline batch data unavailable for ${cartItem.name}. Please reconnect to sync.` };
- }
- 
- const firestoreBatches = batchesSnapshot.docs.map(d => {
+  // Perform FEFO using Firestore local cache
+  for (const cartItem of cartItems) {
+  const safeMedId = String(cartItem.medId).replace(/\//g, '_');
+  const medRef = doc(db, 'tenants', currentSession.pharmacyId, 'storage_inventory', safeMedId);
+  const batchesRef = collection(db, 'tenants', currentSession.pharmacyId, 'storage_inventory', safeMedId, 'batches');
+  const batchesSnapshot = await getDocs(batchesRef);
+
+  // Sales-first: distinguish UNMANAGED (no inventory record exists at all —
+  // record the sale without any stock mutation, batch allocation, or offer
+  // mirror) from MANAGED OUT OF STOCK (inventory doc exists — FEFO below
+  // throws, preserving existing out-of-stock semantics). Online, the
+  // Firestore doc is the authority; the POS 'unmanaged' flag covers the
+  // offline case where the doc cannot be checked.
+  if (batchesSnapshot.empty) {
+  let unmanaged = false;
+  if (!batchesSnapshot.metadata.fromCache) {
+  const medSnap = await getDoc(medRef);
+  unmanaged = !medSnap.exists();
+  } else {
+  unmanaged = !!cartItem.unmanaged;
+  }
+  if (unmanaged) {
+  saleRecordItems.push({
+  medId: cartItem.medId,
+  name: cartItem.name,
+  quantitySold: cartItem.quantitySold,
+  priceAtSale: cartItem.priceAtSale,
+  // No inventory exists — the unit cost is honestly unknown (0 + flag),
+  // never fabricated.
+  costAtSale: 0,
+  costEstimated: true,
+  allocations: [],
+  unmanaged: true
+  });
+  unknownCostItemCount++;
+  continue;
+  }
+  if (batchesSnapshot.metadata.fromCache && cartItem.quantitySold > 0) {
+  return { success: false, error: `Offline batch data unavailable for ${cartItem.name}. Please reconnect to sync.` };
+  }
+  // Managed but no active batches → FEFO below throws (out-of-stock kept).
+  }
+
+  const firestoreBatches = batchesSnapshot.docs.map(d => {
  const data = d.data();
  return new DrugBatch(
  d.id,
@@ -595,11 +628,10 @@ export default function RootNavigator({
  allocations: itemAllocations
  });
 
- // Decrement aggregate stock + append a truthful history entry so the
- // medicine's Recent Activity shows WHY stock changed (P2 #12 — sales were
- // previously invisible there).
- const medRef = doc(db, 'tenants', currentSession.pharmacyId, 'storage_inventory', safeMedId);
- batch.update(medRef, {
+  // Decrement aggregate stock + append a truthful history entry so the
+  // medicine's Recent Activity shows WHY stock changed (P2 #12 — sales were
+  // previously invisible there).
+  batch.update(medRef, {
  stock: increment(-cartItem.quantitySold),
  lastUpdated: new Date().toISOString(),
  history: arrayUnion({
@@ -794,7 +826,10 @@ export default function RootNavigator({
 
   // Compensating stock return — units rejoin the aggregate pool (batch
   // identity lives in the history note, not a separate ledger).
+  // UNMANAGED sale lines never had stock: money-only reversal, no inventory
+  // write (an update on the non-existent inventory doc would fail the batch).
   for (const line of result.refundLines) {
+  if ((sale.items || []).some(i => i.medId === line.medId && i.unmanaged)) continue;
   batch.update(d(db, ...tenantPath, 'storage_inventory', line.medId), {
   stock: inc(line.qty),
   lastUpdated: new Date().toISOString(),

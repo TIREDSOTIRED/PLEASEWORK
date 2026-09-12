@@ -1,7 +1,7 @@
-# PROJECT_STATE.md
+﻿# PROJECT_STATE.md
 
 Compact, factual project memory. Update whenever a phase changes architecture.
-Last updated: Phase CX9 (Redesign Lab).
+Last updated: Phase CX10 (Sales-First Pharmacy model).
 
 ---
 
@@ -26,6 +26,26 @@ Pharmacy: marketplace offers listener (`wholesale_offers WHERE active==true`, se
 Warehouse: realtime PENDING_APPROVAL queue → Dispatch (validate → FEFO allocate → deduct batches+aggregate → decrement offer availability → status DISPATCHED + manifest, single writeBatch) or Reject (status DRAFT).
 Buyer: DISPATCHED → RECEIVED via confirmWarehouseOrderReceipt (+storage_inventory restock).
 Statuses: DRAFT | PENDING_APPROVAL | DISPATCHED | RECEIVED (DRAFT = rejected).
+
+## 5.5 SALES-FIRST PHARMACY MODEL (Phase CX10)
+A pharmacy must be able to sell immediately WITHOUT first digitizing its existing stock. Sales ("what did we sell?") and inventory ("what stock do we manage?") are separate concepts.
+
+**Product states (truthful distinction — never conflated):**
+1. UNMANAGED — no `storage_inventory` record exists; POS sells it directly (scan/search from the catalog). Recorded in ledger with `items[].unmanaged:true`, `costAtSale:0`, `costEstimated:true`, `allocations:[]`. NO stock mutation, NO batch, NO offer mirror. Credit sales record the receivable normally.
+2. MANAGED WITH STOCK — inventory record + active batches → existing FEFO path, unchanged.
+3. MANAGED OUT OF STOCK — inventory record exists, no active batches → FEFO throws → sale blocked (out-of-stock semantics preserved; NOT silently converted back to unmanaged).
+
+**Implementation (additive branch BEFORE FEFO, not a replacement):**
+- `firestoreCompleteSale` (RootNavigator): when `batches` snapshot is empty → online: `getDoc(medRef)` is the authority (med doc missing = unmanaged); offline: the POS `unmanaged` flag decides → push sale-record item only and `continue` (skips FEFO, aggregate decrement, offer mirror, `batch.update` on a non-existent doc that would fail the whole writeBatch). Mixed carts handled per-line.
+- `processRefund`: refund lines whose sale item is `unmanaged` skip the compensating stock return (money-only; the inventory doc doesn't exist).
+- POS (POSCashierView): `Medicine.unmanaged?: boolean` marks sale-only cards built by `toUnmanagedSaleMed()` (catalog product → honest `stock:0`, no batch, unknown expiry, stable id `catalog-{sako}`). Unmanaged lines bypass stock gating in `addItemToCart`/`updateQuantity`/cart stepper and carry a "بيع حر / Open sale" chip. Scan fallback NO LONGER calls `onAddMedicine` (no fake inventory write); catalog search falls back to unmanaged sale cards (`searchLocalMeds` / remote-catalog hits) when no local stock bridges.
+- Cart payload flags `unmanaged`; retried/parked transactions re-enter the same branch (flag rides in `items`).
+
+**E2E-verified (171-unmanaged-sale-e2e.js, test tenant):** unmanaged cash sale → ledger `Paid`; unmanaged credit sale → `Pending` receivable with customer; managed FEFO sale → stock 10→8; unmanaged sale creates NO inventory doc (mirror length stable); unmanaged refund → `RET-` money-only reversal, original flips to `Refunded`; unmanaged stepper has no stock ceiling (qty 5 from stock 0).
+
+**Intentionally NOT changed:** `FEFOStockAllocator`, atomic stock mutations, BackgroundSyncEngine parked-payload behavior, barcode identity resolution, tenant isolation, ledger/financial recording, Firestore source-of-truth. Sales History → "Add/organize inventory" conversion flow is a FUTURE phase, not implemented.
+
+**PWA inspection (Priority 3 — findings only, nothing changed):** no web app manifest, no 192/512 icons, no service worker/app-shell cache, no start_url/display (only apple meta tags + theme-color). HTTPS ✅, IndexedDB data-offline ✅. Next PWA pass: manifest + icons + SW precache shell (must NOT cache Firestore/API traffic; IDB layer is sensitive — see IDB v3 incident).
 
 ## 6. FIRESTORE COLLECTIONS + SECURITY MODEL
 - `tenants/{tenantId}` (+`storage_inventory/{medId}/batches`, `ledger`): tenant private inventory/sales. Rules file still permissive (`auth != null`) outside b2b_orders — HARDENING PENDING DEPLOYMENT.
@@ -124,4 +144,4 @@ RegisterApplicationService + AntiFraudEngine + domain/ledger pipeline (dormant; 
 - Ledger skeletons until first tenant snapshot (isLoadingInventory flag through App→RootNavigator→tabs) — no more fake empty-state flash.
 
 ## 13. LATEST TYPECHECK/LINT/BUILD STATUS
-`tsc --noEmit` CLEAN · lint script (= tsc) CLEAN · `vite build` ✓ · `npm test` 16/16 passed (Phase 6.19 commit `ce38547`). Device passes needed for: surplus publish→buy loop, dock on 320px, notifications delivery post-rules-deploy.
+`tsc --noEmit` CLEAN - lint script (= tsc) CLEAN - `vite build` OK - `npm test` 105/105 passed (Phase CX10, sales-first model). E2E (test tenant): unmanaged cash/credit/FEFO/refund/no-fake-stock matrix PASS (171-unmanaged-report.json).

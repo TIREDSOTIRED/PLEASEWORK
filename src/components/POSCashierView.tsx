@@ -70,6 +70,33 @@ const CATEGORY_PILLS = [
  { id: 'supplies', labelEn: 'Supplies', labelAr: 'مستلزمات' }
 ];
 
+// Sales-first model: a catalog product with NO managed inventory baseline
+// becomes an UNMANAGED sale card — honest stock 0, no fabricated batch, and
+// it is never written to inventory. The sale itself (cash or credit) records
+// fully in the ledger. Conversion to managed inventory happens only through
+// real stock intake, never through the POS.
+const toUnmanagedSaleMed = (c: any, barcode: string): Medicine => {
+  const key = String(c?.sako || c?.id || barcode || '');
+  const med = normalizeMedicine({
+    id: `catalog-${key}`,
+    catalogId: key,
+    name: String(c?.name || c?.name_en || barcode || ''),
+    barcode: barcode,
+    genericName: String(c?.composition_key || c?.nameEn || ''),
+    category: String(c?.company_name || c?.company || 'General'),
+    dosageForm: String(c?.form || 'Tablet'),
+    price: Number(c?.price || c?.public_price || c?.syp_price) || 0,
+    costPrice: 0,
+    stock: 0,
+    minThreshold: 0,
+    batchNumber: ''
+  });
+  med.unmanaged = true;
+  // Honest unknown expiry — normalizeMedicine would fabricate TODAY's date.
+  med.expiryDate = '';
+  return med;
+};
+
 export default function POSCashierView({
  lang: propLang,
  medicines,
@@ -185,6 +212,21 @@ export default function POSCashierView({
  let results = medicines;
   const query = debouncedSearchQuery.toLowerCase().trim();
 
+  // Sales-first helpers: render catalog products as UNMANAGED sale cards.
+  const showUnmanagedCatalog = (hits: any[]) => {
+  if (!isMounted) return;
+  const cards = (hits || [])
+  .map((c: any) => toUnmanagedSaleMed(c, String(c?.barcode || '').replace(/,/g, '').trim()))
+  .filter(m => m.name);
+  if (cards.length > 0) setFilteredMedicines(cards);
+  };
+  const showUnmanagedCatalogFromLocal = async (q: string) => {
+  try {
+  const { searchLocalMeds } = await import('../services/syncEngine');
+  showUnmanagedCatalog(await searchLocalMeds(q, 8));
+  } catch (e) { /* catalog not synced yet — stay silent */ }
+  };
+
   if (query) {
   results = results.filter(med => 
   (med.name && med.name.toLowerCase().includes(query)) ||
@@ -213,10 +255,17 @@ export default function POSCashierView({
   hitKeys.has(String(m.catalogId || '')) ||
   hitKeys.has(String(m.barcode || '').trim())
   );
-  if (bridged.length > 0) setFilteredMedicines(bridged);
+  if (bridged.length > 0) { setFilteredMedicines(bridged); return; }
   }
+  // Sales-first: no local stock bridges to the catalog hits — offer the
+  // catalog products themselves as UNMANAGED sale cards.
+  showUnmanagedCatalog(catalogHits);
   })
   .catch(() => {});
+  } else if (results.length === 0 && query) {
+  // CatalogContext not ready/available — fall back to the always-available
+  // local IndexedDB catalog (same source the scanner uses).
+  showUnmanagedCatalogFromLocal(query);
   }
   }
 
@@ -337,7 +386,10 @@ export default function POSCashierView({
 
   // Add Item to Cart
   const addItemToCart = useCallback(async (med: Medicine, qty: number = 1) => {
-  if (med.stock <= 0) {
+  // UNMANAGED sale line (catalog product without inventory): bypasses all
+  // stock gating — the sale records in the ledger, nothing else.
+  const unmanaged = !!med.unmanaged;
+  if (!unmanaged && med.stock <= 0) {
   hardware.playScanError();
   triggerToast(lang === 'ar' ? ' نفد المخزون! الكمية الحالية: 0.' : ' Out of Stock! Current quantity: 0.', 'error');
   return;
@@ -345,35 +397,37 @@ export default function POSCashierView({
 
   // NOTE: success beep fires ONLY inside setCart once the outcome is known —
   // a premature beep here caused double/error-then-success sounds.
- 
- let allocatedBatch = "N/A";
- let batchExpiry = "";
- try {
- const repo = new IndexedDbInventoryRepository();
- const batches = await repo.getValidBatchesForDrug(med.catalogId || med.barcode || med.id);
- if (batches.length > 0) {
- batches.sort((a, b) => a.expiryDate.getTime() - b.expiryDate.getTime());
- allocatedBatch = batches[0].batchNumber;
- batchExpiry = batches[0].expiryDate.toISOString().split('T')[0];
- } else {
- allocatedBatch = med.batchNumber || "BATCH-N/A";
- batchExpiry = med.expiryDate ? new Date(med.expiryDate).toISOString().split('T')[0] : 'Unknown';
- }
- } catch (e) {
- allocatedBatch = med.batchNumber || "BATCH-N/A";
- batchExpiry = med.expiryDate ? new Date(med.expiryDate).toISOString().split('T')[0] : 'Unknown';
- }
- 
- setCart(prev => {
- const existingIdx = prev.findIndex(item => item.med.id === med.id);
- if (existingIdx >= 0) {
- const existing = prev[existingIdx];
- const newQuantity = existing.quantity + qty;
- if (newQuantity > med.stock) {
- hardware.playScanError();
- triggerToast(lang === 'ar' ? 'الكمية المطلوبة تتجاوز المخزون المتوفر' : 'Requested quantity exceeds available stock', 'info');
- return prev;
- }
+
+  let allocatedBatch = "N/A";
+  let batchExpiry = "";
+  if (!unmanaged) {
+  try {
+  const repo = new IndexedDbInventoryRepository();
+  const batches = await repo.getValidBatchesForDrug(med.catalogId || med.barcode || med.id);
+  if (batches.length > 0) {
+  batches.sort((a, b) => a.expiryDate.getTime() - b.expiryDate.getTime());
+  allocatedBatch = batches[0].batchNumber;
+  batchExpiry = batches[0].expiryDate.toISOString().split('T')[0];
+  } else {
+  allocatedBatch = med.batchNumber || "BATCH-N/A";
+  batchExpiry = med.expiryDate ? new Date(med.expiryDate).toISOString().split('T')[0] : 'Unknown';
+  }
+  } catch (e) {
+  allocatedBatch = med.batchNumber || "BATCH-N/A";
+  batchExpiry = med.expiryDate ? new Date(med.expiryDate).toISOString().split('T')[0] : 'Unknown';
+  }
+  }
+
+  setCart(prev => {
+  const existingIdx = prev.findIndex(item => item.med.id === med.id);
+  if (existingIdx >= 0) {
+  const existing = prev[existingIdx];
+  const newQuantity = existing.quantity + qty;
+  if (!unmanaged && newQuantity > med.stock) {
+  hardware.playScanError();
+  triggerToast(lang === 'ar' ? 'الكمية المطلوبة تتجاوز المخزون المتوفر' : 'Requested quantity exceeds available stock', 'info');
+  return prev;
+  }
  hardware.playScanSuccess();
  const updated = [...prev];
  updated[existingIdx] = { 
@@ -451,44 +505,17 @@ export default function POSCashierView({
   console.warn('POS local catalog lookup failed:', e);
   }
   if (catalogItem) {
-  const newMed = normalizeMedicine({
-  id: `med-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
-  catalogId: String(catalogItem.sako || catalogItem.id || lookupCode),
-  name: String(catalogItem.name || catalogItem.name_en || lookupCode),
-  barcode: lookupCode,
-  genericName: String(catalogItem.composition_key || catalogItem.nameEn || ''),
-  category: String(catalogItem.company_name || catalogItem.company || 'General'),
-  dosageForm: String(catalogItem.form || 'Tablet'),
-  price: Number(catalogItem.price || catalogItem.public_price || catalogItem.syp_price) || 0,
-  // Honest unknown acquisition cost: deriveBatchCost(0) marks the batch
-  // costEstimated so profit math reports 'unavailable' instead of guessing.
-  // (A missing costPrice here becomes `undefined` through normalizeMedicine,
-  // which Firestore setDoc() rejects — that silently killed scan-to-add.)
-  costPrice: 0,
-  // The scanned box physically exists — one truthful unit; adjust in intake.
-  stock: 1,
-  minThreshold: 5,
-  batchNumber: lookupCode,
-  ownerId: currentSession?.pharmacyId,
-  lastUpdated: new Date().toISOString()
-  });
-  // Honest unknown expiry: normalizeMedicine would fabricate TODAY, which makes
-  // the batch instantly expired and unsellable (FEFO). The card stays Unknown
-  // until real intake records the true expiry.
-  newMed.expiryDate = '';
-  try {
-  if (onAddMedicine) {
-  await onAddMedicine(newMed);
+  // Sales-first (UNMANAGED): the product is identified from the catalog and
+  // sold directly. Do NOT create inventory, a fake batch, or a stock claim —
+  // the sale records in the ledger; managed inventory comes only from real
+  // stock intake later.
+  const newMed = toUnmanagedSaleMed(catalogItem, lookupCode);
+  addItemToCart(newMed, 1);
   triggerToast(
-  lang === 'ar' ? `تمت إضافة ${newMed.name} من الكتالوج (1 وحدة)` : `Added ${newMed.name} from catalog (1 unit)`,
+  lang === 'ar' ? `أُضيف ${newMed.name} للبيع (غير مُدار في المخزون)` : `Added ${newMed.name} to sale (no inventory tracking)`,
   'success'
   );
-  addItemToCart(newMed, 1);
   return;
-  }
-  } catch (e) {
-  console.warn('POS scan-to-add failed:', e);
-  }
   }
 
   hardware.playScanError();
@@ -502,7 +529,7 @@ export default function POSCashierView({
  'error'
  );
  }
-  }, [medicines, addItemToCart, hardware, lang, triggerToast, onAddMedicine, currentSession]);
+  }, [medicines, addItemToCart, hardware, lang, triggerToast, currentSession]);
 
  useEffect(() => {
  if (externalScannedCode) {
@@ -532,14 +559,17 @@ export default function POSCashierView({
   try {
   const checkoutSessionId = `SALE-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
-  const cartPayload = currentCart.map(item => ({
-  medId: item.med.id,
-  name: item.med.name,
-  quantitySold: item.quantity,
-  priceAtSale: item.med.price
-  // NOTE: real unit cost is resolved from dispensed batch records during
-  // checkout (utils/cost.ts) — never estimated here.
-  }));
+   const cartPayload = currentCart.map(item => ({
+   medId: item.med.id,
+   name: item.med.name,
+   quantitySold: item.quantity,
+   priceAtSale: item.med.price,
+   // Sales-first: catalog lines without managed inventory record as
+   // unmanaged — no stock mutation, no fabricated batches.
+   unmanaged: !!item.med.unmanaged
+   // NOTE: real unit cost is resolved from dispensed batch records during
+   // checkout (utils/cost.ts) — never estimated here.
+   }));
   
   const invoiceId = `INV-${Math.floor(10000 + Math.random() * 90000)}`;
   const total = currentCart.reduce((sum, item) => sum + (item.quantity * item.med.price), 0);
@@ -669,7 +699,8 @@ export default function POSCashierView({
  setCart(prev => prev.map(item => {
  if (item.med.id === medId) {
  const newQ = item.quantity + delta;
- if (newQ > item.med.stock) {
+ // Unmanaged lines have no stock ceiling — the sale is the record.
+ if (!item.med.unmanaged && newQ > item.med.stock) {
  triggerToast(lang === 'ar' ? 'الكمية المطلوبة تتجاوز المخزون' : 'Requested quantity exceeds stock', 'info');
  return item;
  }
@@ -1047,13 +1078,13 @@ export default function POSCashierView({
                   </div>
                 ) : (
                   visibleMedicines.map((med, idx) => (
-                    <div 
-                      key={med.id} 
+                    <div
+                      key={med.id}
                       className={`flex items-center justify-between p-3 hover:bg-brand-50/50 transition-colors cursor-pointer ${
-                        med.stock <= 0 ? "bg-amber-50/30" : ""
+                        med.stock <= 0 && !med.unmanaged ? "bg-amber-50/30" : ""
                       } ${idx === selectedIndex && searchQuery ? "bg-brand-50 ring-1 ring-inset ring-brand-500/30" : ""}`}
                       onClick={() => {
-                        if (med.stock > 0) {
+                        if (med.unmanaged || med.stock > 0) {
                           addItemToCart(med);
                           setSearchQuery("");
                           searchInputRef.current?.focus();
@@ -1066,7 +1097,11 @@ export default function POSCashierView({
                       <div className="flex-1 min-w-0 pr-3">
                         <div className="flex items-center gap-2 mb-0.5">
                           <h4 className="font-bold text-slate-900 text-sm sm:text-base truncate">{med.name}</h4>
-                          {med.stock <= 0 && (
+                          {med.unmanaged ? (
+                            <span className="px-1.5 py-0.5 bg-sky-100 text-sky-900 text-[10px] font-bold rounded uppercase">
+                              {lang === "ar" ? "بيع حر" : "Open sale"}
+                            </span>
+                          ) : med.stock <= 0 && (
                             <span className="px-1.5 py-0.5 bg-amber-100 text-amber-900 text-[10px] font-bold rounded uppercase">
                               {lang === "ar" ? "بدائل متوفرة" : "Equivalents"}
                             </span>
@@ -1083,12 +1118,18 @@ export default function POSCashierView({
                           <div className="font-bold text-brand-700 text-sm sm:text-base font-mono">
                             {med.price.toLocaleString()} <span className="text-[10px] text-brand-600/70">SYP</span>
                           </div>
-                          <div className={`text-[11px] font-bold ${med.stock > 10 ? "text-slate-500" : "text-amber-600"}`}>
-                            {lang === "ar" ? "المخزون:" : "Stock:"} {med.stock}
-                          </div>
+                          {med.unmanaged ? (
+                            <div className="text-[11px] font-bold text-sky-600">
+                              {lang === "ar" ? "بيع مباشر" : "Direct sale"}
+                            </div>
+                          ) : (
+                            <div className={`text-[11px] font-bold ${med.stock > 10 ? "text-slate-500" : "text-amber-600"}`}>
+                              {lang === "ar" ? "المخزون:" : "Stock:"} {med.stock}
+                            </div>
+                          )}
                         </div>
-                        {med.stock > 0 ? (
-                          <button 
+                        {med.unmanaged || med.stock > 0 ? (
+                          <button
                             type="button"
                             className="p-2 rounded-lg bg-brand-700 hover:bg-brand-800 text-white transition-colors shadow-sm cursor-pointer"
                             title={lang === "ar" ? "إضافة إلى السلة" : "Add to cart"}
@@ -1173,7 +1214,11 @@ export default function POSCashierView({
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <h4 className="font-bold text-slate-900 text-sm sm:text-base truncate">{item.med.name}</h4>
-                            {item.allocatedBatch && item.allocatedBatch !== "N/A" && (
+                            {item.med.unmanaged ? (
+                              <span className="px-1.5 py-0.2 bg-sky-50 text-sky-700 text-[10px] font-bold rounded border border-sky-200">
+                                {lang === "ar" ? "بيع حر" : "Open sale"}
+                              </span>
+                            ) : item.allocatedBatch && item.allocatedBatch !== "N/A" && (
                               <span className="px-1.5 py-0.2 bg-slate-100 text-slate-600 text-[10px] font-mono rounded border border-slate-200">
                                 {item.allocatedBatch}
                               </span>
@@ -1196,9 +1241,9 @@ export default function POSCashierView({
                               <Minus className="w-3.5 h-3.5" />
                             </button>
                             <span className="w-8 sm:w-10 text-center font-bold text-sm font-mono text-slate-900">{item.quantity}</span>
-                            <button 
+                            <button
                               onClick={() => {
-                                if (item.quantity < item.med.stock) {
+                                if (item.med.unmanaged || item.quantity < item.med.stock) {
                                   setCart(prev => prev.map(c => c.id === item.id ? { ...c, quantity: c.quantity + 1 } : c));
                                 } else {
                                   triggerToast(lang === "ar" ? "الكمية المطلوبة تتجاوز المخزون" : "Quantity exceeds stock", "info");
