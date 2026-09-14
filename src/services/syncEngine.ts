@@ -1,4 +1,4 @@
-import { openDB, DBSchema, IDBPDatabase } from 'idb';
+import { openDB, DBSchema, IDBPDatabase, deleteDB } from 'idb';
 import { SupabaseClient } from '@supabase/supabase-js';
 
 interface PharmacyDB extends DBSchema {
@@ -45,20 +45,42 @@ export function normalizeCompanyKey(rawCompany: any): string {
   return normalizedKey.replace(/\s+/g, ' ').trim();
 }
 
+function createStores(db: IDBPDatabase<PharmacyDB>) {
+  if (!db.objectStoreNames.contains(STORE_NAME)) {
+    const store = db.createObjectStore(STORE_NAME, { keyPath: 'sako' });
+    store.createIndex('by-barcode', 'barcode');
+    store.createIndex('by-name', 'name');
+    store.createIndex('by-company', 'company_name');
+  }
+}
+
 export async function getDB() {
- if (!dbPromise) {
- dbPromise = openDB<PharmacyDB>(DB_NAME, DB_VERSION, {
- upgrade(db) {
- if (!db.objectStoreNames.contains(STORE_NAME)) {
- const store = db.createObjectStore(STORE_NAME, { keyPath: 'sako' });
- store.createIndex('by-barcode', 'barcode');
- store.createIndex('by-name', 'name');
- store.createIndex('by-company', 'company_name');
- }
- },
- });
- }
- return dbPromise;
+  if (!dbPromise) {
+    dbPromise = (async () => {
+      let db = await openDB<PharmacyDB>(DB_NAME, DB_VERSION, { upgrade: createStores });
+      // Recovery: a DB that already exists at DB_VERSION but WITHOUT its store
+      // never re-runs the upgrade callback (same-version opens skip upgrade)
+      // and stays permanently empty — every catalog operation then throws.
+      // The store is this DB's only content, so deleting the empty shell and
+      // reopening once is lossless and involves no version/schema migration.
+      // If another tab blocks the deletion, fall back to the as-is handle so
+      // behavior is no worse than before (downstream catch paths apply).
+      if (!db.objectStoreNames.contains(STORE_NAME)) {
+        try {
+          db.close();
+          await Promise.race([
+            deleteDB(DB_NAME),
+            new Promise(resolve => setTimeout(resolve, 3000))
+          ]);
+          db = await openDB<PharmacyDB>(DB_NAME, DB_VERSION, { upgrade: createStores });
+        } catch (e) {
+          console.error('[syncEngine] Storeless catalog DB recovery failed:', e);
+        }
+      }
+      return db;
+    })();
+  }
+  return dbPromise;
 }
 
 /**
@@ -281,27 +303,35 @@ export async function getUniqueCompaniesLocal(): Promise<{ name: string, count: 
   }
   try {
   const db = await getDB();
+  // KEY-ONLY pass over the 'by-company' index: counts entries per normalized
+  // company key WITHOUT deserializing any record bodies. The legacy full-cursor
+  // scan normalized `MANUFACTURER || manufacturer || Manufacturer || COMPANY ||
+  // company || company_name`, but synced MEDS rows only ever carry
+  // `company_name`, so the index keys are the complete picture — the only rows
+  // missing from the index are those with NULL/empty company_name, which the
+  // legacy fallback bucketed under 'Unknown Manufacturer'.
+  const totalRows = await db.count(STORE_NAME);
   const tx = db.transaction(STORE_NAME, 'readonly');
-  const store = tx.objectStore(STORE_NAME);
-  let cursor = await store.openCursor();
+  const companyIndex = tx.objectStore(STORE_NAME).index('by-company');
   const map = new Map<string, number>();
-  
-  while (cursor) {
-  const item = cursor.value;
-  const rawCompany = item.MANUFACTURER || item.manufacturer || item.Manufacturer || item.COMPANY || item.company || item.company_name || 'Unknown Manufacturer';
-  
-  const key = normalizeCompanyKey(rawCompany) || 'Unknown';
-  const displayName = String(rawCompany).trim();
-  
-  if (!map.has(key)) {
-  map.set(key, 1);
+  const bump = (key: string) => map.set(key, (map.get(key) || 0) + 1);
+  let keyCursor = await companyIndex.openKeyCursor();
+  let indexedEntries = 0;
+  while (keyCursor) {
+  indexedEntries++;
+  const raw = keyCursor.key;
+  if (typeof raw === 'string' && raw.trim() !== '') {
+  bump(normalizeCompanyKey(raw) || 'Unknown');
   } else {
-  map.set(key, map.get(key)! + 1);
+  // Empty-string keys and non-string values were falsy in the legacy
+  // chain, i.e. they landed in the same 'Unknown Manufacturer' bucket.
+  bump('unknown manufacturer');
   }
-  
-  cursor = await cursor.continue();
+  keyCursor = await keyCursor.continue();
   }
-  
+  const unindexed = totalRows - indexedEntries;
+  if (unindexed > 0) bump('unknown manufacturer');
+
   companiesCache = Array.from(map.entries()).map(([k, v]) => ({ name: k, count: v }));
   return companiesCache;
   } catch (err) {
@@ -549,8 +579,15 @@ export async function searchLocalMeds(searchTerm: string, maxResults: number = 5
   const companyIndex = tx.objectStore(STORE_NAME).index('by-company');
   let keyCursor = await companyIndex.openKeyCursor();
   const rawKeys: IDBValidKey[] = [];
+  // A raw company key appears in the index ONCE PER ROW (hundreds of duplicate
+  // entries for large manufacturers). Each distinct raw key must be queried
+  // exactly once or every row gets classified once per duplicate entry
+  // (n² work and duplicated results — e.g. a 561-row company produced
+  // 561 copies of each product and a ~60s load).
+  const seenRawKeys = new Set<string>();
   while (keyCursor) {
-  if (normalizeCompanyKey(keyCursor.key) === companyFilter) {
+  if (normalizeCompanyKey(keyCursor.key) === companyFilter && !seenRawKeys.has(String(keyCursor.key))) {
+  seenRawKeys.add(String(keyCursor.key));
   rawKeys.push(keyCursor.key);
   }
   keyCursor = await keyCursor.continue();

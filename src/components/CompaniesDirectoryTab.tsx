@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useCatalog, MappedMedicine, mapMedicine } from '../context/CatalogContext';
 import { 
@@ -82,6 +82,9 @@ export default function CompaniesDirectoryTab({
   // Company Portfolio Medicines
   const [companyPortfolio, setCompanyPortfolio] = useState<MappedMedicine[]>([]);
   const [isLoadingPortfolio, setIsLoadingPortfolio] = useState(false);
+  // Sequence token: only the most recently started portfolio fetch may commit
+  // results (a slow older company lookup must never overwrite a newer one).
+  const portfolioRequestId = useRef(0);
 
   // Modals: Medicine Detail & Scientific Alternatives
   const [inspectedMedicine, setInspectedMedicine] = useState<MappedMedicine | null>(null);
@@ -219,9 +222,11 @@ export default function CompaniesDirectoryTab({
       }
 
       setIsLoadingPortfolio(true);
+      const requestId = ++portfolioRequestId.current;
       try {
         const q = debouncedCompanyQuery.trim();
         const rawResults = await searchLocalMeds(q, 60, selectedCompany.id);
+        if (!isMounted || requestId !== portfolioRequestId.current) return;
         const results = rawResults.map((item, idx) => mapMedicine(item, idx));
         if (isMounted) {
           setCompanyPortfolio(results);
@@ -229,7 +234,7 @@ export default function CompaniesDirectoryTab({
       } catch (e) {
         console.error("Failed to fetch company portfolio:", e);
       } finally {
-        if (isMounted) setIsLoadingPortfolio(false);
+        if (isMounted && requestId === portfolioRequestId.current) setIsLoadingPortfolio(false);
       }
     };
 
@@ -772,7 +777,9 @@ export default function CompaniesDirectoryTab({
                   {selectedCompany.name}
                 </h2>
                 <p className="text-xs text-slate-500">
-                  {companyPortfolio.length} {lang === 'ar' ? 'مستحضر دوائي مسجل' : 'registered pharmaceutical products'}
+                  {isLoadingPortfolio
+                    ? (lang === 'ar' ? 'جارٍ التحميل…' : 'Loading…')
+                    : <>{companyPortfolio.length} {lang === 'ar' ? 'مستحضر دوائي مسجل' : 'registered pharmaceutical products'}</>}
                 </p>
               </div>
             </div>
