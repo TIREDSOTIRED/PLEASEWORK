@@ -1,7 +1,6 @@
 import CentralScannerModal from './scanner/CentralScannerModal';
 import InlineCameraScanner from './scanner/InlineCameraScanner';
 import FirstRunChecklist from './FirstRunChecklist';
-import TabIntro from './ui/TabIntro';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Modal } from './ui/Modal';
 import { motion, AnimatePresence } from 'motion/react';
@@ -863,13 +862,17 @@ export default function POSCashierView({
           {/* SECTION 1: POS HEADER & SEARCH / BARCODE SCANNER */}
           <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 sm:p-5 flex flex-col gap-4">
             <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-                  <ShoppingCart className="w-5 h-5 text-brand-700" />
-                  {lang === "ar" ? "نقطة البيع (الكاشير)" : "Point of Sale (POS)"}
+              <div className="min-w-0">
+                <h2 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2 min-w-0">
+                  <ShoppingCart className="w-5 h-5 text-brand-700 shrink-0" />
+                  <span className="truncate">
+                    {pharmacyName
+                      ? (lang === "ar" ? `مرحباً، صيدلية ${pharmacyName}` : `Welcome, ${pharmacyName}`)
+                      : (lang === "ar" ? "مرحباً" : "Welcome")}
+                  </span>
                 </h2>
                 <p className="text-xs text-slate-500 font-medium mt-0.5">
-                  <TabIntro tabKey="pos">{lang === "ar" ? "مسح الباركود، تحديد الدواء، ومتابعة السلة" : "Scan barcode, select medicine, and manage cart"}</TabIntro>
+                  {lang === "ar" ? "نقطة البيع" : "Point of Sale"}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -880,13 +883,22 @@ export default function POSCashierView({
                   title={lang === "ar" ? "سجل المبيعات" : "Sales history"}
                 >
                   <History className="w-4 h-4 text-slate-500" />
-                  {lang === "ar" ? "السجل" : "History"}
+                  {lang === "ar" ? "سجل المبيعات" : "Sales History"}
                 </button>
-                <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-mono border ${
-                  scannerReady ? "border-brand-200 text-brand-800 bg-brand-50" : "border-amber-200 text-amber-800 bg-amber-50"
-                }`}>
+                <div
+                  className={`flex items-center rounded-lg border font-bold ${
+                    scannerReady
+                      ? "px-2 py-1.5 border-brand-200 text-brand-800 bg-brand-50"
+                      : "px-3 py-1.5 gap-1.5 text-xs font-mono border-amber-200 text-amber-800 bg-amber-50"
+                  }`}
+                  title={scannerReady
+                    ? (lang === "ar" ? "الماسح جاهز" : "Scanner ready")
+                    : (lang === "ar" ? "الادخال اليدوي" : "Input mode")}
+                >
                   {scannerReady ? <Zap className="w-4 h-4 text-brand-600" /> : <PauseCircle className="w-4 h-4 text-amber-600" />}
-                  <span>{scannerReady ? (lang === "ar" ? "الماسح جاهز" : "SCANNER READY") : (lang === "ar" ? "الادخال اليدوي" : "INPUT MODE")}</span>
+                  {!scannerReady && (
+                    <span>{lang === "ar" ? "الادخال اليدوي" : "INPUT MODE"}</span>
+                  )}
                 </div>
               </div>
             </div>
