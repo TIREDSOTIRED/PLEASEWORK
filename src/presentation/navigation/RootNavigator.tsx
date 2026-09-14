@@ -84,7 +84,9 @@ export default function RootNavigator({
  const [activeTab, setActiveTab] = useState<'checkout'|'catalog'|'b2b_marketplace'|'inventory'|'analytics'|'settings'|'scan'|'camera'|'warehouse_inventory'|'warehouse_ingestion'|'b2b_queue'|'warehouse_orders'|'warehouse_offers'>('checkout');
  const [isAccountModalOpen, setIsAccountModalOpen] = useState(false);
  // "More" sidebar fold — auto-open when a folded tab is active (P3 nav declutter).
- const [showMoreTabs, setShowMoreTabs] = useState(() => ['b2b_marketplace', 'b2b_queue'].includes(activeTab as string));
+  const [showMoreTabs, setShowMoreTabs] = useState(() => ['b2b_marketplace', 'b2b_queue'].includes(activeTab as string));
+  // Retail mobile "More" sheet (nav declutter — B2B/settings/analytics).
+  const [showMoreSheet, setShowMoreSheet] = useState(false);
  // Organization profile editor (identity system)
  const [profileEditOpen, setProfileEditOpen] = useState(false);
  const [pendingPosScan, setPendingPosScan] = useState<{ code: string; timestamp: number } | null>(null);
@@ -925,6 +927,33 @@ export default function RootNavigator({
   const SECONDARY_TAB_IDS = ['b2b_marketplace', 'b2b_queue'];
   const secondarySidebarTabs = isWarehouse ? [] : mobileDockTabs.filter(t => SECONDARY_TAB_IDS.includes(t.id));
   const primarySidebarTabs = mobileDockTabs.filter(t => !secondarySidebarTabs.includes(t));
+
+  // Retail mobile dock (sales-first task hub): POS, Camera, Stock, History
+  // (Financial Ledger), More sheet. B2B + Settings + Analytics live behind
+  // المزيد. Warehouse dock and the desktop sidebar are unchanged.
+  const MORE_SHEET_IDS = ['b2b_marketplace', 'b2b_queue', 'settings', 'analytics'];
+  const retailMobileDock: { id: string; label: string; icon: any }[] = [
+    { id: 'checkout', label: lang === 'ar' ? 'نقطة البيع' : 'POS', icon: ShoppingCart },
+    { id: 'camera', label: lang === 'ar' ? 'الكاميرا' : 'Camera', icon: Camera },
+    { id: 'inventory_stock', label: lang === 'ar' ? 'المخزون' : 'Stock', icon: Package },
+    { id: 'inventory_ledger', label: lang === 'ar' ? 'السجل' : 'History', icon: FileText },
+    { id: 'more', label: lang === 'ar' ? 'المزيد' : 'More', icon: MoreHorizontal }
+  ];
+  const handleRetailDockClick = (id: string) => {
+    if (id === 'more') { setShowMoreSheet(true); return; }
+    // المخزون and السجل share the inventory surface — the sub-view decides
+    // whether Stock or the Financial Ledger is shown.
+    if (id === 'inventory_stock') { setInventoryView('inventory'); setActiveTab('inventory'); return; }
+    if (id === 'inventory_ledger') { setInventoryView('ledger'); setActiveTab('inventory'); return; }
+    setActiveTab(id as any);
+  };
+  const isRetailDockActive = (id: string) => {
+    if (id === 'checkout' || id === 'camera') return activeTab === id;
+    if (id === 'inventory_stock') return activeTab === 'inventory' && inventoryView === 'inventory';
+    if (id === 'inventory_ledger') return activeTab === 'inventory' && inventoryView === 'ledger';
+    if (id === 'more') return MORE_SHEET_IDS.includes(activeTab as string);
+    return false;
+  };
   const renderTabButton = (tab: (typeof mobileDockTabs)[number]) => {
   const isActive = activeTab === tab.id || (tab.id === 'inventory' && activeTab === 'warehouse_inventory');
   return (
@@ -1234,20 +1263,23 @@ setSortOrder={setSortOrder}
  )}
  </main>
   {/* Floating Mobile Bottom Navigation Dock (Phones) — single row for ANY tab count */}
- <nav 
+  <nav
           id="mobile-bottom-navigation"
-          className="md:hidden flex-none z-50 bg-white border-t border-slate-200 shadow-[0_-2px_12px_rgba(0,0,0,0.08)] px-1 pt-1.5 pb-[max(0.6rem,env(safe-area-inset-bottom,0px))] grid w-full" 
-          style={{ gridTemplateColumns: `repeat(${mobileDockTabs.length}, minmax(0, 1fr))` }}
+          className="md:hidden flex-none z-50 bg-white border-t border-slate-200 shadow-[0_-2px_12px_rgba(0,0,0,0.08)] px-1 pt-1.5 pb-[max(0.6rem,env(safe-area-inset-bottom,0px))] grid w-full"
+          style={{ gridTemplateColumns: `repeat(${isWarehouse ? mobileDockTabs.length : retailMobileDock.length}, minmax(0, 1fr))` }}
           dir={lang === "ar" ? "rtl" : "ltr"}
         >
-          {mobileDockTabs.map((tab) => {
-            const isActive = activeTab === tab.id || (tab.id === "inventory" && activeTab === "warehouse_inventory");
+          {(isWarehouse ? mobileDockTabs : retailMobileDock).map((tab) => {
+            const isActive = isWarehouse
+              ? (activeTab === tab.id || (tab.id === "inventory" && activeTab === "warehouse_inventory"))
+              : isRetailDockActive(tab.id);
             return (
               <button
                 key={tab.id}
                 id={"mobile-nav-" + tab.id}
                 type="button"
                 onClick={() => {
+                  if (!isWarehouse) { handleRetailDockClick(tab.id); return; }
                   if (tab.id === "inventory" && activePharmacy?.tenantType === "WHOLESALE_WAREHOUSE") {
                     setActiveTab("warehouse_inventory");
                   } else {
@@ -1268,6 +1300,38 @@ setSortOrder={setSortOrder}
             );
           })}
         </nav>
+
+        {/* Retail "More" mobile sheet — lower-frequency destinations behind المزيد */}
+        {!isWarehouse && showMoreSheet && (
+          <div className="md:hidden fixed inset-0 z-[60]" dir={lang === "ar" ? "rtl" : "ltr"}>
+            <div className="absolute inset-0 bg-slate-900/40 backdrop-blur-[2px]" onClick={() => setShowMoreSheet(false)} />
+            <div className="absolute inset-x-0 bottom-0 rounded-t-2xl bg-white border-t border-slate-200 shadow-2xl p-4 pb-[max(1rem,env(safe-area-inset-bottom,0px))]">
+              <div className="w-10 h-1 rounded-full bg-slate-200 mx-auto mb-3" />
+              <div className="grid grid-cols-2 gap-2">
+                {([
+                  { id: 'b2b_marketplace', label: lang === "ar" ? "طلباتي" : "My Orders", icon: ShoppingBag },
+                  { id: 'b2b_queue', label: lang === "ar" ? "طلبات الفائض" : "Surplus Requests", icon: Inbox },
+                  { id: 'settings', label: lang === "ar" ? "الإعدادات" : "Settings", icon: SettingsIcon },
+                  { id: 'analytics', label: lang === "ar" ? "الإحصاءات" : "Analytics", icon: BarChart3 }
+                ]).map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => { setShowMoreSheet(false); setActiveTab(item.id as any); }}
+                    className={`flex flex-col items-center justify-center gap-1.5 p-4 rounded-xl border font-bold text-xs transition-colors cursor-pointer ${
+                      activeTab === item.id
+                        ? "bg-brand-50 border-brand-300 text-brand-800"
+                        : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
+                    }`}
+                  >
+                    <item.icon className="w-5 h-5" />
+                    <span className="truncate max-w-full">{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
  </div>
  </div>
 
