@@ -13,9 +13,15 @@ export const unlockCamera = () => {
 interface FullScreenScannerTabProps {
  onScan: (barcode: string, mode: 'sell' | 'restock' | 'add') => Promise<'known' | 'unknown'> | void;
  lang?: 'en' | 'ar';
+ /**
+  * Dedicated-camera mode: hide the sell/restock/add mode selector — the
+  * camera identifies and the host shows an explicit action card instead.
+  * Defaults to true so existing mode-based usage is unchanged.
+  */
+ showModes?: boolean;
 }
 
-export default function FullScreenScannerTab({ onScan, lang = 'en' }: FullScreenScannerTabProps) {
+export default function FullScreenScannerTab({ onScan, lang = 'en', showModes = true }: FullScreenScannerTabProps) {
  const [mode, setMode] = useState<'sell' | 'restock' | 'add'>('sell');
  const modeRef = useRef(mode);
  
@@ -238,25 +244,27 @@ export default function FullScreenScannerTab({ onScan, lang = 'en' }: FullScreen
  </div>
  </div>
 
- {/* Mode Selector Overlay (Bottom) */}
- <div className="relative z-20 mt-auto p-6 w-full flex justify-center pb-12 sm:pb-8">
- <div className="p-2 rounded-xl flex items-center gap-2 border border-white/10 shadow-lg bg-white/90 max-w-sm w-full transition-all">
- {modes.map(m => {
- const Icon = m.icon;
- const isActive = mode === m.id;
- return (
- <button
- key={m.id}
- onClick={() => setMode(m.id as any)}
- className={`flex-1 flex flex-col items-center justify-center py-3 px-2 rounded-xl transition-all duration-300 border ${isActive ? m.activeClass : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'}`}
- >
- <Icon className={`w-5 h-5 mb-1 ${isActive ? '' : 'opacity-70'}`} />
- <span className={`text-[10px] font-bold tracking-wide uppercase ${isActive ? '' : 'opacity-70'}`}>{m.label}</span>
- </button>
- );
- })}
- </div>
- </div>
+  {/* Mode Selector Overlay (Bottom) */}
+  {showModes && (
+  <div className="relative z-20 mt-auto p-6 w-full flex justify-center pb-12 sm:pb-8">
+  <div className="p-2 rounded-xl flex items-center gap-2 border border-white/10 shadow-lg bg-white/90 max-w-sm w-full transition-all">
+  {modes.map(m => {
+  const Icon = m.icon;
+  const isActive = mode === m.id;
+  return (
+  <button
+  key={m.id}
+  onClick={() => setMode(m.id as any)}
+  className={`flex-1 flex flex-col items-center justify-center py-3 px-2 rounded-xl transition-all duration-300 border ${isActive ? m.activeClass : 'border-transparent text-slate-400 hover:text-slate-200 hover:bg-white/5'}`}
+  >
+  <Icon className={`w-5 h-5 mb-1 ${isActive ? '' : 'opacity-70'}`} />
+  <span className={`text-[10px] font-bold tracking-wide uppercase ${isActive ? '' : 'opacity-70'}`}>{m.label}</span>
+  </button>
+  );
+  })}
+  </div>
+  </div>
+  )}
  </div>
  );
 }

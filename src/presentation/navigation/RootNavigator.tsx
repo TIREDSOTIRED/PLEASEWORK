@@ -87,6 +87,9 @@ export default function RootNavigator({
   const [showMoreTabs, setShowMoreTabs] = useState(() => ['b2b_marketplace', 'b2b_queue'].includes(activeTab as string));
   // Retail mobile "More" sheet (nav declutter — B2B/settings/analytics).
   const [showMoreSheet, setShowMoreSheet] = useState(false);
+  // Dedicated camera = IDENTIFY: scan → identify → show information in place.
+  // Selling/intake are explicit secondary actions on the result card.
+  const [cameraIdentify, setCameraIdentify] = useState<{ code: string; kind: 'managed' | 'catalog' | 'unknown'; med?: Medicine; cat?: any } | null>(null);
  // Organization profile editor (identity system)
  const [profileEditOpen, setProfileEditOpen] = useState(false);
  const [pendingPosScan, setPendingPosScan] = useState<{ code: string; timestamp: number } | null>(null);
@@ -863,6 +866,30 @@ export default function RootNavigator({
   }
   };
 
+  /**
+   * Dedicated camera (الكاميرا): scan → identify → show information in place.
+   * Always resolves 'known' so the scanner resumes — the inline result card is
+   * the identification surface. Selling/stock intake are EXPLICIT buttons on
+   * the card (they reuse the existing POS/intake dispatch paths).
+   */
+  const handleCameraIdentify = async (barcode: string): Promise<'known' | 'unknown'> => {
+    const code = String(barcode || '').replace(/,/g, '').trim();
+    if (!code) return 'known';
+    const med = medicines.find(m =>
+      String(m.barcode || '').replace(/,/g, '').trim() === code ||
+      String(m.id || '').replace(/,/g, '').trim() === code ||
+      String(m.batchNumber || '').replace(/,/g, '').trim() === code
+    );
+    if (med) { setCameraIdentify({ code, kind: 'managed', med }); return 'known'; }
+    try {
+      const { findLocalMedByBarcode } = await import('../../services/syncEngine');
+      const cat = await findLocalMedByBarcode(code);
+      if (cat) { setCameraIdentify({ code, kind: 'catalog', cat }); return 'known'; }
+    } catch (e) { /* catalog not synced — fall through to unknown */ }
+    setCameraIdentify({ code, kind: 'unknown' });
+    return 'known';
+  };
+
   if (isLoading) {
  return (
  <div className="min-h-screen bg-slate-100 dark:bg-[#0f172a] flex flex-col items-center justify-center p-4">
@@ -928,19 +955,17 @@ export default function RootNavigator({
   const secondarySidebarTabs = isWarehouse ? [] : mobileDockTabs.filter(t => SECONDARY_TAB_IDS.includes(t.id));
   const primarySidebarTabs = mobileDockTabs.filter(t => !secondarySidebarTabs.includes(t));
 
-  // Retail mobile dock (sales-first task hub): POS, Camera, Stock, History
-  // (Financial Ledger), More sheet. B2B + Settings + Analytics live behind
-  // المزيد. Warehouse dock and the desktop sidebar are unchanged.
-  const MORE_SHEET_IDS = ['b2b_marketplace', 'b2b_queue', 'settings', 'analytics'];
+  // Retail mobile dock (sales-first task hub): POS, Catalog, Camera, Stock,
+  // History(Financial Ledger). Lower-frequency surfaces (B2B, Settings,
+  // Analytics) live behind المزيد in the mobile header.
   const retailMobileDock: { id: string; label: string; icon: any }[] = [
     { id: 'checkout', label: lang === 'ar' ? 'نقطة البيع' : 'POS', icon: ShoppingCart },
+    { id: 'catalog', label: lang === 'ar' ? 'الأدوية' : 'Medicines', icon: Pill },
     { id: 'camera', label: lang === 'ar' ? 'الكاميرا' : 'Camera', icon: Camera },
     { id: 'inventory_stock', label: lang === 'ar' ? 'المخزون' : 'Stock', icon: Package },
-    { id: 'inventory_ledger', label: lang === 'ar' ? 'السجل' : 'History', icon: FileText },
-    { id: 'more', label: lang === 'ar' ? 'المزيد' : 'More', icon: MoreHorizontal }
+    { id: 'inventory_ledger', label: lang === 'ar' ? 'السجل' : 'History', icon: FileText }
   ];
   const handleRetailDockClick = (id: string) => {
-    if (id === 'more') { setShowMoreSheet(true); return; }
     // المخزون and السجل share the inventory surface — the sub-view decides
     // whether Stock or the Financial Ledger is shown.
     if (id === 'inventory_stock') { setInventoryView('inventory'); setActiveTab('inventory'); return; }
@@ -948,10 +973,9 @@ export default function RootNavigator({
     setActiveTab(id as any);
   };
   const isRetailDockActive = (id: string) => {
-    if (id === 'checkout' || id === 'camera') return activeTab === id;
+    if (id === 'checkout' || id === 'catalog' || id === 'camera') return activeTab === id;
     if (id === 'inventory_stock') return activeTab === 'inventory' && inventoryView === 'inventory';
     if (id === 'inventory_ledger') return activeTab === 'inventory' && inventoryView === 'ledger';
-    if (id === 'more') return MORE_SHEET_IDS.includes(activeTab as string);
     return false;
   };
   const renderTabButton = (tab: (typeof mobileDockTabs)[number]) => {
@@ -1051,16 +1075,24 @@ export default function RootNavigator({
  Eshmun
  </h1>
  </div>
- <div className="flex items-center gap-2">
- {themeToggle}
- <SyncStatusWidget />
- <button 
- onClick={() => setIsAccountModalOpen(true)}
- className="w-8 h-8 rounded-md bg-slate-100 border border-slate-300 text-slate-700 flex items-center justify-center font-semibold text-xs"
- >
- {currentSession?.fullName?.charAt(0) || 'U'}
- </button>
- </div>
+  <div className="flex items-center gap-2">
+  <button
+  onClick={() => setShowMoreSheet(true)}
+  className="w-8 h-8 rounded-md bg-slate-100 border border-slate-300 text-slate-700 flex items-center justify-center cursor-pointer"
+  aria-label={lang === 'ar' ? 'المزيد' : 'More'}
+  title={lang === 'ar' ? 'المزيد' : 'More'}
+  >
+  <MoreHorizontal className="w-4 h-4" />
+  </button>
+  {themeToggle}
+  <SyncStatusWidget />
+  <button
+  onClick={() => setIsAccountModalOpen(true)}
+  className="w-8 h-8 rounded-md bg-slate-100 border border-slate-300 text-slate-700 flex items-center justify-center font-semibold text-xs"
+  >
+  {currentSession?.fullName?.charAt(0) || 'U'}
+  </button>
+  </div>
  </header>
 
  {/* Main Content Area */}
@@ -1098,9 +1130,9 @@ export default function RootNavigator({
  />
  )}
 
- {activeTab === 'catalog' && (
- <CompaniesDirectoryTab lang={lang} triggerToast={triggerToast} onOpenScanner={() => setIsScannerPickerOpen(true)} onNavigateToPOS={() => setActiveTab('checkout')} onStartIntake={isWarehouse ? handleStartWarehouseIntake : undefined} />
- )}
+  {activeTab === 'catalog' && (
+  <CompaniesDirectoryTab lang={lang} triggerToast={triggerToast} onNavigateToPOS={() => setActiveTab('checkout')} onStartIntake={isWarehouse ? handleStartWarehouseIntake : undefined} />
+  )}
 
  {activeTab === 'b2b_marketplace' && (
  <B2BMarketplaceTab triggerToast={triggerToast} lang={lang} />
@@ -1237,30 +1269,89 @@ setSortOrder={setSortOrder}
  />
  )}
 
- {activeTab === 'camera' && (
- <FullScreenScannerTab 
- lang={lang}
- onScan={async (barcode, mode) => {
- try {
- // Local synthesized beep — works offline (replaces remote mixkit MP3).
- HardwareIntegrationService.getInstance().playScanSuccess();
- if (navigator.vibrate) navigator.vibrate(50);
- } catch(e) {}
-
- const isKnown = medicines.some(m => m.batchNumber === barcode || m.barcode === barcode);
-
- if (mode === 'sell') {
- setActiveTab('checkout');
- setPendingPosScan({ code: barcode, timestamp: Date.now() });
- } else {
- setActiveTab('scan');
- setPendingIntakeScan({ code: barcode, timestamp: Date.now() });
- }
-
- return isKnown ? 'known' : 'unknown';
- }}
- />
- )}
+  {activeTab === 'camera' && (
+  <div className="relative flex-1 min-h-0">
+  <FullScreenScannerTab
+  lang={lang}
+  showModes={false}
+  onScan={handleCameraIdentify}
+  />
+  {/* Identification result card — the camera identifies; actions are explicit */}
+  {cameraIdentify && (
+  <div className="absolute inset-x-0 bottom-4 z-50 px-4" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+  <div className="mx-auto max-w-md rounded-2xl bg-white/95 backdrop-blur-md border border-slate-200 shadow-2xl p-4">
+  <div className="flex items-start justify-between gap-2 mb-2">
+  <div className="min-w-0">
+  {cameraIdentify.kind === 'managed' && (
+  <>
+  <span className="px-1.5 py-0.5 rounded bg-brand-100 text-brand-800 text-[10px] font-bold">{lang === 'ar' ? 'مُدار في المخزون' : 'Managed inventory'}</span>
+  <h3 className="font-black text-slate-900 text-sm mt-1 truncate">{cameraIdentify.med?.name}</h3>
+  <p className="text-xs text-slate-500 font-mono">{cameraIdentify.code}</p>
+  <p className="text-xs text-slate-700 font-bold mt-1">
+  {lang === 'ar' ? 'السعر:' : 'Price:'} {(cameraIdentify.med?.price || 0).toLocaleString()} SYP · {lang === 'ar' ? 'المخزون:' : 'Stock:'} {cameraIdentify.med?.stock ?? 0}
+  </p>
+  </>
+  )}
+  {cameraIdentify.kind === 'catalog' && (
+  <>
+  <span className="px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 text-[10px] font-bold">{lang === 'ar' ? 'من الكتالوج (غير مُدار)' : 'Catalog (unmanaged)'}</span>
+  <h3 className="font-black text-slate-900 text-sm mt-1 truncate">{String(cameraIdentify.cat?.name || cameraIdentify.cat?.name_en || cameraIdentify.code)}</h3>
+  <p className="text-xs text-slate-500 font-mono">{cameraIdentify.code}</p>
+  <p className="text-xs text-slate-700 font-bold mt-1">
+  {lang === 'ar' ? 'السعر:' : 'Price:'} {(Number(cameraIdentify.cat?.price || cameraIdentify.cat?.public_price || cameraIdentify.cat?.syp_price) || 0).toLocaleString()} SYP
+  </p>
+  </>
+  )}
+  {cameraIdentify.kind === 'unknown' && (
+  <>
+  <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 text-[10px] font-bold">{lang === 'ar' ? 'غير معروف' : 'Unknown'}</span>
+  <p className="text-xs text-slate-500 font-mono mt-1">{cameraIdentify.code}</p>
+  <p className="text-xs text-slate-600 mt-1">{lang === 'ar' ? 'لا يوجد منتج مطابق في المخزون أو الكتالوج.' : 'No matching product in inventory or catalog.'}</p>
+  </>
+  )}
+  </div>
+  <button
+  type="button"
+  onClick={() => setCameraIdentify(null)}
+  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
+  aria-label="close"
+  >
+  ✕
+  </button>
+  </div>
+  {cameraIdentify.kind !== 'unknown' && (
+  <div className="grid grid-cols-2 gap-2 mt-3">
+  <button
+  type="button"
+  onClick={() => {
+  const code = cameraIdentify.code;
+  setCameraIdentify(null);
+  setActiveTab('checkout');
+  setPendingPosScan({ code, timestamp: Date.now() });
+  }}
+  className="py-2.5 rounded-xl bg-brand-600 hover:bg-brand-700 text-white font-bold text-xs transition-colors cursor-pointer"
+  >
+  {lang === 'ar' ? 'بيع الآن' : 'Sell now'}
+  </button>
+  <button
+  type="button"
+  onClick={() => {
+  const code = cameraIdentify.code;
+  setCameraIdentify(null);
+  setActiveTab('scan');
+  setPendingIntakeScan({ code, timestamp: Date.now() });
+  }}
+  className="py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200 font-bold text-xs transition-colors cursor-pointer"
+  >
+  {lang === 'ar' ? 'إضافة للمخزون' : 'Add to stock'}
+  </button>
+  </div>
+  )}
+  </div>
+  </div>
+  )}
+  </div>
+  )}
  </main>
   {/* Floating Mobile Bottom Navigation Dock (Phones) — single row for ANY tab count */}
   <nav
@@ -1309,7 +1400,6 @@ setSortOrder={setSortOrder}
               <div className="w-10 h-1 rounded-full bg-slate-200 mx-auto mb-3" />
               <div className="grid grid-cols-2 gap-2">
                 {([
-                  { id: 'catalog', label: lang === "ar" ? "الأدوية" : "Medicines", icon: Pill },
                   { id: 'b2b_marketplace', label: lang === "ar" ? "طلباتي" : "My Orders", icon: ShoppingBag },
                   { id: 'b2b_queue', label: lang === "ar" ? "طلبات الفائض" : "Surplus Requests", icon: Inbox },
                   { id: 'settings', label: lang === "ar" ? "الإعدادات" : "Settings", icon: SettingsIcon },
