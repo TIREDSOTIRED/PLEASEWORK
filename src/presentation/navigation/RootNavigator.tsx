@@ -1309,6 +1309,7 @@ setSortOrder={setSortOrder}
               <div className="w-10 h-1 rounded-full bg-slate-200 mx-auto mb-3" />
               <div className="grid grid-cols-2 gap-2">
                 {([
+                  { id: 'catalog', label: lang === "ar" ? "الأدوية" : "Medicines", icon: Pill },
                   { id: 'b2b_marketplace', label: lang === "ar" ? "طلباتي" : "My Orders", icon: ShoppingBag },
                   { id: 'b2b_queue', label: lang === "ar" ? "طلبات الفائض" : "Surplus Requests", icon: Inbox },
                   { id: 'settings', label: lang === "ar" ? "الإعدادات" : "Settings", icon: SettingsIcon },
